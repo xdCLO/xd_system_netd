@@ -15,8 +15,8 @@
  * limitations under the License.
  */
 
-#include <string>
 #include <random>
+#include <string>
 #include <vector>
 
 #include <ctype.h>
@@ -125,15 +125,15 @@ void* kPadBytes = static_cast<void*>(kPadBytesArray);
     if (__android_log_is_debuggable()) {                                                           \
         do {                                                                                       \
             logHex(__desc16__, __buf__, __len__);                                                  \
-           } while (0);                                                                            \
+        } while (0);                                                                               \
     }
 
 #define LOG_IOV(__iov__)                                                                           \
     if (__android_log_is_debuggable()) {                                                           \
         do {                                                                                       \
             logIov(__iov__);                                                                       \
-           } while (0);                                                                            \
-     }
+        } while (0);                                                                               \
+    }
 
 void logHex(const char* desc16, const char* buf, size_t len) {
     char* printBuf = new char[len * 2 + 1 + 26]; // len->ascii, +newline, +prefix strlen
@@ -227,7 +227,9 @@ public:
     netdutils::Status sendMessage(uint16_t nlMsgType, uint16_t nlMsgFlags, uint16_t nlMsgSeqNum,
                                   std::vector<iovec>* iovecs) const override {
         nlmsghdr nlMsg = {
-            .nlmsg_type = nlMsgType, .nlmsg_flags = nlMsgFlags, .nlmsg_seq = nlMsgSeqNum,
+            .nlmsg_type = nlMsgType,
+            .nlmsg_flags = nlMsgFlags,
+            .nlmsg_seq = nlMsgSeqNum,
         };
 
         (*iovecs)[0].iov_base = &nlMsg;
@@ -338,6 +340,39 @@ private:
 //
 XfrmController::XfrmController(void) {}
 
+netdutils::Status XfrmController::ipSecSetEncapSocketOwner(const android::base::unique_fd& socket,
+                                                           int newUid, uid_t callerUid) {
+    ALOGD("XfrmController:%s, line=%d", __FUNCTION__, __LINE__);
+
+    const int fd = socket.get();
+    struct stat info;
+    if (fstat(fd, &info)) {
+        return netdutils::statusFromErrno(errno, "Failed to stat socket file descriptor");
+    }
+    if (info.st_uid != callerUid) {
+        return netdutils::statusFromErrno(EPERM, "fchown disabled for non-owner calls");
+    }
+    if (S_ISSOCK(info.st_mode) == 0){
+        return netdutils::statusFromErrno(EINVAL, "File descriptor was not a socket");
+    }
+
+    int optval;
+    socklen_t optlen;
+    netdutils::Status status = getSyscallInstance().getsockopt(Fd(socket), IPPROTO_UDP, UDP_ENCAP,
+                                                               &optval, &optlen);
+    if (status != netdutils::status::ok) {
+        return status;
+    }
+    if (optval != UDP_ENCAP_ESPINUDP && optval != UDP_ENCAP_ESPINUDP_NON_IKE){
+        return netdutils::statusFromErrno(EINVAL, "Socket did not have UDP-encap sockopt set");
+    }
+    if (fchown(fd, newUid, -1)) {
+        return netdutils::statusFromErrno(errno, "Failed to fchown socket file descriptor");
+    }
+
+    return netdutils::status::ok;
+}
+
 netdutils::Status XfrmController::ipSecAllocateSpi(int32_t transformId, int32_t direction,
                                                    const std::string& localAddress,
                                                    const std::string& remoteAddress, int32_t inSpi,
@@ -350,9 +385,8 @@ netdutils::Status XfrmController::ipSecAllocateSpi(int32_t transformId, int32_t 
     ALOGD("inSpi=%0.8x", inSpi);
 
     XfrmSaInfo saInfo{};
-
     netdutils::Status ret =
-        fillXfrmSaId(direction, localAddress, remoteAddress, INVALID_SPI, &saInfo);
+        fillXfrmId(direction, localAddress, remoteAddress, INVALID_SPI, transformId, &saInfo);
     if (!isOk(ret)) {
         return ret;
     }
@@ -386,8 +420,6 @@ netdutils::Status XfrmController::ipSecAddSecurityAssociation(
     const std::string& cryptAlgo, const std::vector<uint8_t>& cryptKey, int32_t cryptTruncBits,
     const std::string& aeadAlgo, const std::vector<uint8_t>& aeadKey, int32_t aeadIcvBits,
     int32_t encapType, int32_t encapLocalPort, int32_t encapRemotePort) {
-    android::RWLock::AutoWLock lock(mLock);
-
     ALOGD("XfrmController::%s, line=%d", __FUNCTION__, __LINE__);
     ALOGD("transformId=%d", transformId);
     ALOGD("mode=%d", mode);
@@ -407,12 +439,11 @@ netdutils::Status XfrmController::ipSecAddSecurityAssociation(
     ALOGD("encapRemotePort=%d", encapRemotePort);
 
     XfrmSaInfo saInfo{};
-    netdutils::Status ret = fillXfrmSaId(direction, localAddress, remoteAddress, spi, &saInfo);
+    netdutils::Status ret =
+        fillXfrmId(direction, localAddress, remoteAddress, spi, transformId, &saInfo);
     if (!isOk(ret)) {
         return ret;
     }
-
-    saInfo.transformId = transformId;
 
     saInfo.auth = XfrmAlgo{
         .name = authAlgo, .key = authKey, .truncLenBits = static_cast<uint16_t>(authTruncBits)};
@@ -467,7 +498,7 @@ netdutils::Status XfrmController::ipSecAddSecurityAssociation(
             return netdutils::statusFromErrno(EINVAL, "Invalid encap type");
     }
 
-    ret = createTransportModeSecurityAssociation(saInfo, sock);
+    ret = createSecurityAssociation(saInfo, sock);
     if (!isOk(ret)) {
         ALOGD("Failed creating a Security Association, line=%d", __LINE__);
     }
@@ -487,8 +518,9 @@ netdutils::Status XfrmController::ipSecDeleteSecurityAssociation(int32_t transfo
     ALOGD("remoteAddress=%s", remoteAddress.c_str());
     ALOGD("spi=%0.8x", spi);
 
-    XfrmSaId saId{};
-    netdutils::Status ret = fillXfrmSaId(direction, localAddress, remoteAddress, spi, &saId);
+    XfrmId saId{};
+    netdutils::Status ret =
+        fillXfrmId(direction, localAddress, remoteAddress, spi, transformId, &saId);
     if (!isOk(ret)) {
         return ret;
     }
@@ -508,11 +540,16 @@ netdutils::Status XfrmController::ipSecDeleteSecurityAssociation(int32_t transfo
     return ret;
 }
 
-netdutils::Status XfrmController::fillXfrmSaId(int32_t direction, const std::string& localAddress,
-                                               const std::string& remoteAddress, int32_t spi,
-                                               XfrmSaId* xfrmId) {
-    xfrm_address_t localXfrmAddr{}, remoteXfrmAddr{};
+netdutils::Status XfrmController::fillXfrmId(int32_t direction, const std::string& localAddress,
+                                             const std::string& remoteAddress, int32_t spi,
+                                             int32_t transformId, XfrmId* xfrmId) {
+    // Fill the straightforward fields first
+    xfrmId->transformId = transformId;
+    xfrmId->direction = static_cast<XfrmDirection>(direction);
+    xfrmId->spi = htonl(spi);
 
+    // Use the addresses to determine the address family and do validation
+    xfrm_address_t localXfrmAddr{}, remoteXfrmAddr{};
     StatusOr<int> addrFamilyLocal, addrFamilyRemote;
     addrFamilyRemote = convertToXfrmAddr(remoteAddress, &remoteXfrmAddr);
     addrFamilyLocal = convertToXfrmAddr(localAddress, &localXfrmAddr);
@@ -530,8 +567,6 @@ netdutils::Status XfrmController::fillXfrmSaId(int32_t direction, const std::str
     }
 
     xfrmId->addrFamily = addrFamilyRemote.value();
-
-    xfrmId->spi = htonl(spi);
 
     switch (static_cast<XfrmDirection>(direction)) {
         case XfrmDirection::IN:
@@ -562,22 +597,16 @@ netdutils::Status XfrmController::ipSecApplyTransportModeTransform(
     ALOGD("remoteAddress=%s", remoteAddress.c_str());
     ALOGD("spi=%0.8x", spi);
 
-    struct sockaddr_storage saddr;
-
     StatusOr<sockaddr_storage> ret = getSyscallInstance().getsockname<sockaddr_storage>(Fd(socket));
     if (!isOk(ret)) {
         ALOGE("Failed to get socket info in %s", __FUNCTION__);
         return ret;
     }
-
-    saddr = ret.value();
+    struct sockaddr_storage saddr = ret.value();
 
     XfrmSaInfo saInfo{};
-    saInfo.transformId = transformId;
-    saInfo.direction = static_cast<XfrmDirection>(direction);
-    saInfo.spi = spi;
-
-    netdutils::Status status = fillXfrmSaId(direction, localAddress, remoteAddress, spi, &saInfo);
+    netdutils::Status status =
+        fillXfrmId(direction, localAddress, remoteAddress, spi, transformId, &saInfo);
     if (!isOk(status)) {
         ALOGE("Couldn't build SA ID %s", __FUNCTION__);
         return status;
@@ -635,8 +664,8 @@ void XfrmController::fillTransportModeSelector(const XfrmSaInfo& record, xfrm_se
     selector->ifindex = record.netId; // TODO : still need to sort this out
 }
 
-netdutils::Status XfrmController::createTransportModeSecurityAssociation(const XfrmSaInfo& record,
-                                                                         const XfrmSocket& sock) {
+netdutils::Status XfrmController::createSecurityAssociation(const XfrmSaInfo& record,
+                                                            const XfrmSocket& sock) {
     xfrm_usersa_info usersa{};
     nlattr_algo_crypt crypt{};
     nlattr_algo_auth auth{};
@@ -708,7 +737,7 @@ int XfrmController::fillNlAttrXfrmAlgoEnc(const XfrmAlgo& inAlgo, nlattr_algo_cr
     int len = NLA_HDRLEN + sizeof(xfrm_algo);
     // Kernel always changes last char to null terminator; no safety checks needed.
     strncpy(algo->crypt.alg_name, inAlgo.name.c_str(), sizeof(algo->crypt.alg_name));
-    algo->crypt.alg_key_len = inAlgo.key.size() * 8;      // bits
+    algo->crypt.alg_key_len = inAlgo.key.size() * 8; // bits
     memcpy(algo->key, &inAlgo.key[0], inAlgo.key.size());
     len += inAlgo.key.size();
     fillXfrmNlaHdr(&algo->hdr, XFRMA_ALG_CRYPT, len);
@@ -785,11 +814,17 @@ int XfrmController::fillUserSaInfo(const XfrmSaInfo& record, xfrm_usersa_info* u
     usersa->family = record.addrFamily;
     usersa->mode = static_cast<uint8_t>(record.mode);
     usersa->replay_window = REPLAY_WINDOW_SIZE;
-    usersa->flags = 0; // TODO: should we actually set flags, XFRM_SA_XFLAG_DONT_ENCAP_DSCP?
+
+    if (record.mode == XfrmMode::TRANSPORT) {
+        usersa->flags = 0; // TODO: should we actually set flags, XFRM_SA_XFLAG_DONT_ENCAP_DSCP?
+    } else {
+        usersa->flags = XFRM_STATE_AF_UNSPEC;
+    }
+
     return sizeof(*usersa);
 }
 
-int XfrmController::fillUserSaId(const XfrmSaId& record, xfrm_usersa_id* said) {
+int XfrmController::fillUserSaId(const XfrmId& record, xfrm_usersa_id* said) {
     said->daddr = record.dstAddr;
     said->spi = record.spi;
     said->family = record.addrFamily;
@@ -798,7 +833,7 @@ int XfrmController::fillUserSaId(const XfrmSaId& record, xfrm_usersa_id* said) {
     return sizeof(*said);
 }
 
-netdutils::Status XfrmController::deleteSecurityAssociation(const XfrmSaId& record,
+netdutils::Status XfrmController::deleteSecurityAssociation(const XfrmId& record,
                                                             const XfrmSocket& sock) {
     xfrm_usersa_id said{};
 

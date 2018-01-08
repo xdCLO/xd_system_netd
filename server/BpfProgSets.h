@@ -13,18 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <linux/bpf.h>
+#include <linux/if_ether.h>
+#include <linux/in.h>
+#include <linux/unistd.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
 
-#include <arpa/inet.h>
-#include <linux/netfilter.h>
-#include <linux/netfilter/nfnetlink.h>
-#include <linux/netlink.h>
-#include <ios>
+namespace android {
+namespace net {
+namespace bpf_prog {
 
-#include "netdutils/Netfilter.h"
+int loadIngressProg(int cookieTagMap, int uidStatsMap, int tagStatsMap, int uidCounterSetMap);
+int loadEgressProg(int cookieTagMap, int uidStatsMap, int tagStatsMap, int uidCounterSetMap);
 
-std::ostream& operator<<(std::ostream& os, const nfgenmsg& msg) {
-    return os << std::hex << "nfgenmsg["
-              << "family: 0x" << static_cast<int>(msg.nfgen_family) << ", version: 0x"
-              << static_cast<int>(msg.version) << ", res_id: 0x" << ntohs(msg.res_id) << "]"
-              << std::dec;
-}
+}  // namespace bpf_prog
+}  // namespace net
+}  // namespace android

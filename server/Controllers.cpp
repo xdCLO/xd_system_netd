@@ -188,13 +188,18 @@ void Controllers::createChildChains(IptablesTarget target, const char* table,
 Controllers::Controllers()
     : clatdCtrl(&netCtrl),
       wakeupCtrl(
-          [this](const std::string& prefix, uid_t uid, gid_t gid, uint64_t timestampNs) {
+          [this](const WakeupController::ReportArgs& args) {
               const auto listener = eventReporter.getNetdEventListener();
               if (listener == nullptr) {
                   ALOGE("getNetdEventListener() returned nullptr. dropping wakeup event");
                   return;
               }
-              listener->onWakeupEvent(String16(prefix.c_str()), uid, gid, timestampNs);
+              String16 prefix = String16(args.prefix.c_str());
+              String16 srcIp = String16(args.srcIp.c_str());
+              String16 dstIp = String16(args.dstIp.c_str());
+              listener->onWakeupEvent(prefix, args.uid, args.ethertype, args.ipNextHeader,
+                                      args.dstHw, srcIp, dstIp, args.srcPort, args.dstPort,
+                                      args.timestampNs);
           },
           &iptablesRestoreCtrl) {
     InterfaceController::initializeAll();
@@ -260,12 +265,16 @@ void Controllers::initIptablesRules() {
 
 void Controllers::init() {
     initIptablesRules();
-
+    int ret = trafficCtrl.start();
+    if (ret) {
+        ALOGE("failed to start trafficcontroller: (%s)", strerror(-ret));
+    }
     Stopwatch s;
     bandwidthCtrl.enableBandwidthControl(false);
     ALOGI("Disabling bandwidth control: %.1fms", s.getTimeAndReset());
 
-    if (int ret = RouteController::Init(NetworkController::LOCAL_NET_ID)) {
+    ret = RouteController::Init(NetworkController::LOCAL_NET_ID);
+    if (ret) {
         ALOGE("failed to initialize RouteController (%s)", strerror(-ret));
     }
     ALOGI("Initializing RouteController: %.1fms", s.getTimeAndReset());

@@ -26,7 +26,6 @@
 #include <linux/udp.h>
 #include <linux/xfrm.h>
 #include <sysutils/SocketClient.h>
-#include <utils/RWLock.h>
 
 #include "NetdConstants.h"
 #include "netdutils/Status.h"
@@ -100,7 +99,8 @@ struct XfrmEncap {
     uint16_t dstPort;
 };
 
-struct XfrmSaId {
+// minimally sufficient structure to match either an SA or a Policy
+struct XfrmId {
     XfrmDirection direction;
     xfrm_address_t dstAddr; // network order
     xfrm_address_t srcAddr;
@@ -109,7 +109,7 @@ struct XfrmSaId {
     int spi;
 };
 
-struct XfrmSaInfo : XfrmSaId {
+struct XfrmSaInfo : XfrmId {
     XfrmAlgo auth;
     XfrmAlgo crypt;
     XfrmAlgo aead;
@@ -121,6 +121,9 @@ struct XfrmSaInfo : XfrmSaId {
 class XfrmController {
 public:
     XfrmController();
+
+    netdutils::Status ipSecSetEncapSocketOwner(const android::base::unique_fd& socket, int newUid,
+                                               uid_t callerUid);
 
     netdutils::Status ipSecAllocateSpi(int32_t transformId, int32_t direction,
                                        const std::string& localAddress,
@@ -194,9 +197,6 @@ public:
     };
 
 private:
-    // prevent concurrent modification of XFRM
-    android::RWLock mLock;
-
 /*
  * Below is a redefinition of the xfrm_usersa_info struct that is part
  * of the Linux uapi <linux/xfrm.h> to align the structures to a 64-bit
@@ -237,10 +237,10 @@ private:
                   "struct xfrm_userspi_info has changed and does not match the kernel struct.");
 #endif
 
-    // helper function for filling in the XfrmSaInfo structure
-    static netdutils::Status fillXfrmSaId(int32_t direction, const std::string& localAddress,
+    // helper function for filling in the XfrmId (and XfrmSaInfo) structure
+    static netdutils::Status fillXfrmId(int32_t direction, const std::string& localAddress,
                                           const std::string& remoteAddress, int32_t spi,
-                                          XfrmSaId* xfrmId);
+                                          int32_t transformId, XfrmId* xfrmId);
 
     // Top level functions for managing a Transport Mode Transform
     static netdutils::Status addTransportModeTransform(const XfrmSaInfo& record);
@@ -257,14 +257,14 @@ private:
     static int fillNlAttrXfrmEncapTmpl(const XfrmSaInfo& record, nlattr_encap_tmpl* tmpl);
 
     // Functions for Creating a Transport Mode SA
-    static netdutils::Status createTransportModeSecurityAssociation(const XfrmSaInfo& record,
-                                                                    const XfrmSocket& sock);
+    static netdutils::Status createSecurityAssociation(const XfrmSaInfo& record,
+                                                       const XfrmSocket& sock);
     static int fillUserSaInfo(const XfrmSaInfo& record, xfrm_usersa_info* usersa);
 
     // Functions for deleting a Transport Mode SA
-    static netdutils::Status deleteSecurityAssociation(const XfrmSaId& record,
+    static netdutils::Status deleteSecurityAssociation(const XfrmId& record,
                                                        const XfrmSocket& sock);
-    static int fillUserSaId(const XfrmSaId& record, xfrm_usersa_id* said);
+    static int fillUserSaId(const XfrmId& record, xfrm_usersa_id* said);
     static int fillUserTemplate(const XfrmSaInfo& record, xfrm_user_tmpl* tmpl);
     static int fillTransportModeUserSpInfo(const XfrmSaInfo& record, xfrm_userpolicy_info* usersp);
 
