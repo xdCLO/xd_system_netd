@@ -119,7 +119,7 @@ status_t NetdNativeService::start() {
     return android::OK;
 }
 
-status_t NetdNativeService::dump(int fd, const Vector<String16> & /* args */) {
+status_t NetdNativeService::dump(int fd, const Vector<String16> &args) {
     const binder::Status dump_permission = checkPermission(DUMP);
     if (!dump_permission.isOk()) {
         const String8 msg(dump_permission.toString8());
@@ -129,7 +129,16 @@ status_t NetdNativeService::dump(int fd, const Vector<String16> & /* args */) {
 
     // This method does not grab any locks. If individual classes need locking
     // their dump() methods MUST handle locking appropriately.
+
     DumpWriter dw(fd);
+
+    if (!args.isEmpty() && args[0] == TcpSocketMonitor::DUMP_KEYWORD) {
+      dw.blankline();
+      gCtls->tcpSocketMonitor.dump(dw);
+      dw.blankline();
+      return NO_ERROR;
+    }
+
     dw.blankline();
     gCtls->netCtrl.dump(dw);
     dw.blankline();
@@ -176,8 +185,10 @@ binder::Status NetdNativeService::networkCreateVpn(int32_t netId, bool hasDns, b
 }
 
 binder::Status NetdNativeService::networkDestroy(int32_t netId) {
-    ENFORCE_PERMISSION(CONNECTIVITY_INTERNAL);
-    int ret = gCtls->netCtrl.destroyNetwork(netId);
+    ENFORCE_PERMISSION(NETWORK_STACK);
+    // Both of these functions manage their own locking internally.
+    const int ret = gCtls->netCtrl.destroyNetwork(netId);
+    gCtls->resolverCtrl.clearDnsServers(netId);
     return statusFromErrcode(ret);
 }
 
@@ -456,9 +467,8 @@ binder::Status NetdNativeService::ipSecSetEncapSocketOwner(const android::base::
 
 binder::Status NetdNativeService::ipSecAllocateSpi(
         int32_t transformId,
-        int32_t direction,
-        const std::string& localAddress,
-        const std::string& remoteAddress,
+        const std::string& sourceAddress,
+        const std::string& destinationAddress,
         int32_t inSpi,
         int32_t* outSpi) {
     // Necessary locking done in IpSecService and kernel
@@ -466,9 +476,8 @@ binder::Status NetdNativeService::ipSecAllocateSpi(
     ALOGD("ipSecAllocateSpi()");
     return asBinderStatus(gCtls->xfrmCtrl.ipSecAllocateSpi(
                     transformId,
-                    direction,
-                    localAddress,
-                    remoteAddress,
+                    sourceAddress,
+                    destinationAddress,
                     inSpi,
                     outSpi));
 }
@@ -476,11 +485,12 @@ binder::Status NetdNativeService::ipSecAllocateSpi(
 binder::Status NetdNativeService::ipSecAddSecurityAssociation(
         int32_t transformId,
         int32_t mode,
-        int32_t direction,
-        const std::string& localAddress,
-        const std::string& remoteAddress,
-        int64_t underlyingNetworkHandle,
+        const std::string& sourceAddress,
+        const std::string& destinationAddress,
+        int32_t underlyingNetId,
         int32_t spi,
+        int32_t markValue,
+        int32_t markMask,
         const std::string& authAlgo, const std::vector<uint8_t>& authKey, int32_t authTruncBits,
         const std::string& cryptAlgo, const std::vector<uint8_t>& cryptKey, int32_t cryptTruncBits,
         const std::string& aeadAlgo, const std::vector<uint8_t>& aeadKey, int32_t aeadIcvBits,
@@ -491,9 +501,9 @@ binder::Status NetdNativeService::ipSecAddSecurityAssociation(
     ENFORCE_PERMISSION(CONNECTIVITY_INTERNAL);
     ALOGD("ipSecAddSecurityAssociation()");
     return asBinderStatus(gCtls->xfrmCtrl.ipSecAddSecurityAssociation(
-              transformId, mode, direction, localAddress, remoteAddress,
-              underlyingNetworkHandle,
-              spi,
+              transformId, mode, sourceAddress, destinationAddress,
+              underlyingNetId,
+              spi, markValue, markMask,
               authAlgo, authKey, authTruncBits,
               cryptAlgo, cryptKey, cryptTruncBits,
               aeadAlgo, aeadKey, aeadIcvBits,
@@ -502,27 +512,29 @@ binder::Status NetdNativeService::ipSecAddSecurityAssociation(
 
 binder::Status NetdNativeService::ipSecDeleteSecurityAssociation(
         int32_t transformId,
-        int32_t direction,
-        const std::string& localAddress,
-        const std::string& remoteAddress,
-        int32_t spi) {
+        const std::string& sourceAddress,
+        const std::string& destinationAddress,
+        int32_t spi,
+        int32_t markValue,
+        int32_t markMask) {
     // Necessary locking done in IpSecService and kernel
     ENFORCE_PERMISSION(CONNECTIVITY_INTERNAL);
     ALOGD("ipSecDeleteSecurityAssociation()");
     return asBinderStatus(gCtls->xfrmCtrl.ipSecDeleteSecurityAssociation(
                     transformId,
-                    direction,
-                    localAddress,
-                    remoteAddress,
-                    spi));
+                    sourceAddress,
+                    destinationAddress,
+                    spi,
+                    markValue,
+                    markMask));
 }
 
 binder::Status NetdNativeService::ipSecApplyTransportModeTransform(
         const android::base::unique_fd& socket,
         int32_t transformId,
         int32_t direction,
-        const std::string& localAddress,
-        const std::string& remoteAddress,
+        const std::string& sourceAddress,
+        const std::string& destinationAddress,
         int32_t spi) {
     // Necessary locking done in IpSecService and kernel
     ENFORCE_PERMISSION(CONNECTIVITY_INTERNAL);
@@ -531,8 +543,8 @@ binder::Status NetdNativeService::ipSecApplyTransportModeTransform(
                     socket,
                     transformId,
                     direction,
-                    localAddress,
-                    remoteAddress,
+                    sourceAddress,
+                    destinationAddress,
                     spi));
 }
 
@@ -543,6 +555,122 @@ binder::Status NetdNativeService::ipSecRemoveTransportModeTransform(
     ALOGD("ipSecRemoveTransportModeTransform()");
     return asBinderStatus(gCtls->xfrmCtrl.ipSecRemoveTransportModeTransform(
                     socket));
+}
+
+binder::Status NetdNativeService::ipSecAddSecurityPolicy(
+        int32_t transformId,
+        int32_t direction,
+        const std::string& sourceAddress,
+        const std::string& destinationAddress,
+        int32_t spi,
+        int32_t markValue,
+        int32_t markMask){
+    // Necessary locking done in IpSecService and kernel
+    ENFORCE_PERMISSION(NETWORK_STACK);
+    ALOGD("ipSecAddSecurityPolicy()");
+    return asBinderStatus(gCtls->xfrmCtrl.ipSecAddSecurityPolicy(
+                    transformId,
+                    direction,
+                    sourceAddress,
+                    destinationAddress,
+                    spi,
+                    markValue,
+                    markMask));
+}
+
+binder::Status NetdNativeService::ipSecUpdateSecurityPolicy(
+        int32_t transformId,
+        int32_t direction,
+        const std::string& sourceAddress,
+        const std::string& destinationAddress,
+        int32_t spi,
+        int32_t markValue,
+        int32_t markMask){
+    // Necessary locking done in IpSecService and kernel
+    ENFORCE_PERMISSION(NETWORK_STACK);
+    ALOGD("ipSecAddSecurityPolicy()");
+    return asBinderStatus(gCtls->xfrmCtrl.ipSecUpdateSecurityPolicy(
+                    transformId,
+                    direction,
+                    sourceAddress,
+                    destinationAddress,
+                    spi,
+                    markValue,
+                    markMask));
+}
+
+binder::Status NetdNativeService::ipSecDeleteSecurityPolicy(
+        int32_t transformId,
+        int32_t direction,
+        const std::string& sourceAddress,
+        const std::string& destinationAddress,
+        int32_t markValue,
+        int32_t markMask){
+    // Necessary locking done in IpSecService and kernel
+    ENFORCE_PERMISSION(NETWORK_STACK);
+    ALOGD("ipSecAddSecurityPolicy()");
+    return asBinderStatus(gCtls->xfrmCtrl.ipSecDeleteSecurityPolicy(
+                    transformId,
+                    direction,
+                    sourceAddress,
+                    destinationAddress,
+                    markValue,
+                    markMask));
+}
+
+binder::Status NetdNativeService::addVirtualTunnelInterface(
+        const std::string& deviceName,
+        const std::string& localAddress,
+        const std::string& remoteAddress,
+        int32_t iKey,
+        int32_t oKey) {
+    // Necessary locking done in IpSecService and kernel
+    ENFORCE_PERMISSION(NETWORK_STACK);
+    ALOGD("addVirtualTunnelInterface()");
+    int ret = gCtls->xfrmCtrl.addVirtualTunnelInterface(
+                             deviceName,
+                             localAddress,
+                             remoteAddress,
+                             iKey,
+                             oKey,
+                             false);
+
+    return (ret == 0) ? binder::Status::ok() :
+                        asBinderStatus(netdutils::statusFromErrno(
+                                       ret, "Error in creating virtual tunnel interface."));
+}
+
+binder::Status NetdNativeService::updateVirtualTunnelInterface(
+        const std::string& deviceName,
+        const std::string& localAddress,
+        const std::string& remoteAddress,
+        int32_t iKey,
+        int32_t oKey) {
+    // Necessary locking done in IpSecService and kernel
+    ENFORCE_PERMISSION(NETWORK_STACK);
+    ALOGD("updateVirtualTunnelInterface()");
+    int ret = gCtls->xfrmCtrl.addVirtualTunnelInterface(
+                             deviceName,
+                             localAddress,
+                             remoteAddress,
+                             iKey,
+                             oKey,
+                             true);
+
+    return (ret == 0) ? binder::Status::ok() :
+                        asBinderStatus(netdutils::statusFromErrno(
+                                       ret, "Error in updating virtual tunnel interface."));
+}
+
+binder::Status NetdNativeService::removeVirtualTunnelInterface(const std::string& deviceName) {
+    // Necessary locking done in IpSecService and kernel
+    ENFORCE_PERMISSION(NETWORK_STACK);
+    ALOGD("removeVirtualTunnelInterface()");
+    int ret = gCtls->xfrmCtrl.removeVirtualTunnelInterface(deviceName);
+
+    return (ret == 0) ? binder::Status::ok() :
+                        asBinderStatus(netdutils::statusFromErrno(
+                                       ret, "Error in removing virtual tunnel interface."));
 }
 
 binder::Status NetdNativeService::setIPv6AddrGenMode(const std::string& ifName,
@@ -563,6 +691,12 @@ binder::Status NetdNativeService::wakeupDelInterface(const std::string& ifName,
                                                      int32_t mask) {
     ENFORCE_PERMISSION(NETWORK_STACK);
     return toBinderStatus(gCtls->wakeupCtrl.delInterface(ifName, prefix, mark, mask));
+}
+
+binder::Status NetdNativeService::trafficCheckBpfStatsEnable(bool* ret) {
+    ENFORCE_PERMISSION(NETWORK_STACK);
+    *ret = gCtls->trafficCtrl.checkBpfStatsEnable();
+    return binder::Status::ok();
 }
 
 }  // namespace net
