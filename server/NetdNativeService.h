@@ -103,7 +103,6 @@ class NetdNativeService : public BinderService<NetdNativeService>, public BnNetd
 
     binder::Status ipSecAllocateSpi(
             int32_t transformId,
-            int32_t direction,
             const std::string& localAddress,
             const std::string& remoteAddress,
             int32_t inSpi,
@@ -112,11 +111,12 @@ class NetdNativeService : public BinderService<NetdNativeService>, public BnNetd
     binder::Status ipSecAddSecurityAssociation(
             int32_t transformId,
             int32_t mode,
-            int32_t direction,
-            const std::string& localAddress,
-            const std::string& remoteAddress,
-            int64_t underlyingNetworkHandle,
+            const std::string& sourceAddress,
+            const std::string& destinationAddress,
+            int32_t underlyingNetId,
             int32_t spi,
+            int32_t markValue,
+            int32_t markMask,
             const std::string& authAlgo,
             const std::vector<uint8_t>& authKey,
             int32_t authTruncBits,
@@ -132,21 +132,66 @@ class NetdNativeService : public BinderService<NetdNativeService>, public BnNetd
 
     binder::Status ipSecDeleteSecurityAssociation(
             int32_t transformId,
-            int32_t direction,
-            const std::string& localAddress,
-            const std::string& remoteAddress,
-            int32_t spi);
+            const std::string& sourceAddress,
+            const std::string& destinationAddress,
+            int32_t spi,
+            int32_t markValue,
+            int32_t markMask);
 
     binder::Status ipSecApplyTransportModeTransform(
             const android::base::unique_fd& socket,
             int32_t transformId,
             int32_t direction,
-            const std::string& localAddress,
-            const std::string& remoteAddress,
+            const std::string& sourceAddress,
+            const std::string& destinationAddress,
             int32_t spi);
 
     binder::Status ipSecRemoveTransportModeTransform(
             const android::base::unique_fd& socket);
+
+    binder::Status ipSecAddSecurityPolicy(
+            int32_t transformId,
+            int32_t direction,
+            const std::string& sourceAddress,
+            const std::string& destinationAddress,
+            int32_t spi,
+            int32_t markValue,
+            int32_t markMask);
+
+    binder::Status ipSecUpdateSecurityPolicy(
+            int32_t transformId,
+            int32_t direction,
+            const std::string& sourceAddress,
+            const std::string& destinationAddress,
+            int32_t spi,
+            int32_t markValue,
+            int32_t markMask);
+
+    binder::Status ipSecDeleteSecurityPolicy(
+            int32_t transformId,
+            int32_t direction,
+            const std::string& sourceAddress,
+            const std::string& destinationAddress,
+            int32_t markValue,
+            int32_t markMask);
+
+    binder::Status trafficCheckBpfStatsEnable(bool* ret) override;
+
+    binder::Status addVirtualTunnelInterface(
+            const std::string& deviceName,
+            const std::string& localAddress,
+            const std::string& remoteAddress,
+            int32_t iKey,
+            int32_t oKey);
+
+    binder::Status updateVirtualTunnelInterface(
+            const std::string& deviceName,
+            const std::string& localAddress,
+            const std::string& remoteAddress,
+            int32_t iKey,
+            int32_t oKey);
+
+    binder::Status removeVirtualTunnelInterface(const std::string& deviceName);
 };
 
 }  // namespace net

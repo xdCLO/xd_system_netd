@@ -326,17 +326,15 @@ interface INetd {
     * Reserve an SPI from the kernel
     *
     * @param transformId a unique identifier for allocated resources
-    * @param direction DIRECTION_IN or DIRECTION_OUT
-    * @param localAddress InetAddress as string for the local endpoint
-    * @param remoteAddress InetAddress as string for the remote endpoint
+    * @param sourceAddress InetAddress as string for the sending endpoint
+    * @param destinationAddress InetAddress as string for the receiving endpoint
     * @param spi a requested 32-bit unique ID or 0 to request random allocation
     * @return the SPI that was allocated or 0 if failed
     */
     int ipSecAllocateSpi(
             int transformId,
-            int direction,
-            in @utf8InCpp String localAddress,
-            in @utf8InCpp String remoteAddress,
+            in @utf8InCpp String sourceAddress,
+            in @utf8InCpp String destinationAddress,
             int spi);
 
    /**
@@ -345,11 +343,12 @@ interface INetd {
     *
     * @param transformId a unique identifier for allocated resources
     * @param mode either Transport or Tunnel mode
-    * @param direction DIRECTION_IN or DIRECTION_OUT
-    * @param localAddress InetAddress as string for the local endpoint
-    * @param remoteAddress InetAddress as string for the remote endpoint
-    * @param underlyingNetworkHandle the networkHandle of the network to which the SA is applied
+    * @param sourceAddress InetAddress as string for the sending endpoint
+    * @param destinationAddress InetAddress as string for the receiving endpoint
+    * @param underlyingNetId the netId of the network to which the SA is applied
     * @param spi a 32-bit unique ID allocated to the user
+    * @param markValue a 32-bit unique ID chosen by the user
+    * @param markMask a 32-bit mask chosen by the user
     * @param authAlgo a string identifying the authentication algorithm to be used
     * @param authKey a byte array containing the authentication key
     * @param authTruncBits the truncation length of the MAC produced by the authentication algorithm
@@ -367,11 +366,12 @@ interface INetd {
     void ipSecAddSecurityAssociation(
             int transformId,
             int mode,
-            int direction,
-            in @utf8InCpp String localAddress,
-            in @utf8InCpp String remoteAddress,
-            long underlyingNetworkHandle,
+            in @utf8InCpp String sourceAddress,
+            in @utf8InCpp String destinationAddress,
+            int underlyingNetId,
             int spi,
+            int markValue,
+            int markMask,
             in @utf8InCpp String authAlgo, in byte[] authKey, in int authTruncBits,
             in @utf8InCpp String cryptAlgo, in byte[] cryptKey, in int cryptTruncBits,
             in @utf8InCpp String aeadAlgo, in byte[] aeadKey, in int aeadIcvBits,
@@ -383,17 +383,19 @@ interface INetd {
     * Delete a previously created security association identified by the provided parameters
     *
     * @param transformId a unique identifier for allocated resources
-    * @param direction DIRECTION_IN or DIRECTION_OUT
-    * @param localAddress InetAddress as string for the local endpoint
-    * @param remoteAddress InetAddress as string for the remote endpoint
+    * @param sourceAddress InetAddress as string for the sending endpoint
+    * @param destinationAddress InetAddress as string for the receiving endpoint
     * @param spi a requested 32-bit unique ID allocated to the user
+    * @param markValue a 32-bit unique ID chosen by the user
+    * @param markMask a 32-bit mask chosen by the user
     */
     void ipSecDeleteSecurityAssociation(
             int transformId,
-            int direction,
-            in @utf8InCpp String localAddress,
-            in @utf8InCpp String remoteAddress,
-            int spi);
+            in @utf8InCpp String sourceAddress,
+            in @utf8InCpp String destinationAddress,
+            int spi,
+            int markValue,
+            int markMask);
 
    /**
     * Apply a previously created SA to a specified socket, starting IPsec on that socket
@@ -401,16 +403,16 @@ interface INetd {
     * @param socket a user-provided socket that will have IPsec applied
     * @param transformId a unique identifier for allocated resources
     * @param direction DIRECTION_IN or DIRECTION_OUT
-    * @param localAddress InetAddress as string for the local endpoint
-    * @param remoteAddress InetAddress as string for the remote endpoint
+    * @param sourceAddress InetAddress as string for the sending endpoint
+    * @param destinationAddress InetAddress as string for the receiving endpoint
     * @param spi a 32-bit unique ID allocated to the user (socket owner)
     */
     void ipSecApplyTransportModeTransform(
             in FileDescriptor socket,
             int transformId,
             int direction,
-            in @utf8InCpp String localAddress,
-            in @utf8InCpp String remoteAddress,
+            in @utf8InCpp String sourceAddress,
+            in @utf8InCpp String destinationAddress,
             int spi);
 
    /**
@@ -421,6 +423,103 @@ interface INetd {
     */
     void ipSecRemoveTransportModeTransform(
             in FileDescriptor socket);
+
+   /**
+    * Adds an IPsec global policy.
+    *
+    * @param transformId a unique identifier for allocated resources
+    * @param direction DIRECTION_IN or DIRECTION_OUT
+    * @param sourceAddress InetAddress as string for the sending endpoint
+    * @param destinationAddress InetAddress as string for the receiving endpoint
+    * @param spi a 32-bit unique ID allocated to the user
+    * @param markValue a 32-bit unique ID chosen by the user
+    * @param markMask a 32-bit mask chosen by the user
+    */
+    void ipSecAddSecurityPolicy(
+            int transformId,
+            int direction,
+            in @utf8InCpp String sourceAddress,
+            in @utf8InCpp String destinationAddress,
+            int spi,
+            int markValue,
+            int markMask);
+
+   /**
+    * Updates an IPsec global policy.
+    *
+    * @param transformId a unique identifier for allocated resources
+    * @param direction DIRECTION_IN or DIRECTION_OUT
+    * @param sourceAddress InetAddress as string for the sending endpoint
+    * @param destinationAddress InetAddress as string for the receiving endpoint
+    * @param spi a 32-bit unique ID allocated to the user
+    * @param markValue a 32-bit unique ID chosen by the user
+    * @param markMask a 32-bit mask chosen by the user
+    */
+    void ipSecUpdateSecurityPolicy(
+            int transformId,
+            int direction,
+            in @utf8InCpp String sourceAddress,
+            in @utf8InCpp String destinationAddress,
+            int spi,
+            int markValue,
+            int markMask);
+
+   /**
+    * Deletes an IPsec global policy.
+    *
+    * @param transformId a unique identifier for allocated resources
+    * @param direction DIRECTION_IN or DIRECTION_OUT
+    * @param sourceAddress InetAddress as string for the sending endpoint
+    * @param destinationAddress InetAddress as string for the receiving endpoint
+    * @param markValue a 32-bit unique ID chosen by the user
+    * @param markMask a 32-bit mask chosen by the user
+    */
+    void ipSecDeleteSecurityPolicy(
+            int transformId,
+            int direction,
+            in @utf8InCpp String sourceAddress,
+            in @utf8InCpp String destinationAddress,
+            int markValue,
+            int markMask);
+
+   /**
+    * Add a Virtual Tunnel Interface.
+    *
+    * @param devName a unique identifier that represents the name of the device
+    * @param localAddress InetAddress as string for the local endpoint
+    * @param remoteAddress InetAddress as string for the remote endpoint
+    * @param iKey, to match Policies and SAs for input packets.
+    * @param oKey, to match Policies and SAs for output packets.
+    */
+    void addVirtualTunnelInterface(
+            in @utf8InCpp String deviceName,
+            in @utf8InCpp String localAddress,
+            in @utf8InCpp String remoteAddress,
+            int iKey,
+            int oKey);
+
+   /**
+    * Update a Virtual Tunnel Interface.
+    *
+    * @param devName a unique identifier that represents the name of the device
+    * @param localAddress InetAddress as string for the local endpoint
+    * @param remoteAddress InetAddress as string for the remote endpoint
+    * @param iKey, to match Policies and SAs for input packets.
+    * @param oKey, to match Policies and SAs for output packets.
+    */
+    void updateVirtualTunnelInterface(
+            in @utf8InCpp String deviceName,
+            in @utf8InCpp String localAddress,
+            in @utf8InCpp String remoteAddress,
+            int iKey,
+            int oKey);
+
+   /**
+    * Removes a Virtual Tunnel Interface.
+    *
+    * @param devName a unique identifier that represents the name of the device
+    */
+    void removeVirtualTunnelInterface(in @utf8InCpp String deviceName);
 
    /**
     * Request notification of wakeup packets arriving on an interface. Notifications will be
@@ -451,4 +550,10 @@ interface INetd {
     * @param mode SLAAC address generation mechanism to use
     */
     void setIPv6AddrGenMode(in @utf8InCpp String ifName, int mode);
+
+   /**
+    * Query the netd service to know if the eBPF traffic stats accounting service is currently
+    * running on the device.
+    */
+    boolean trafficCheckBpfStatsEnable();
 }
