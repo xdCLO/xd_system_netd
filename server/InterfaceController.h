@@ -43,6 +43,7 @@ public:
     static int setMtu(const char *interface, const char *mtu);
     static int addAddress(const char *interface, const char *addrString, int prefixLength);
     static int delAddress(const char *interface, const char *addrString, int prefixLength);
+    static int disableIcmpRedirects();
 
     // Read and write values in files of the form:
     //     /proc/sys/net/<family>/<which>/<interface>/<parameter>
@@ -65,9 +66,10 @@ private:
       std::function<android::netdutils::Status(const std::string& key, const std::string& val)>;
 
   // Helper function exported from this compilation unit for testing.
-  static android::netdutils::Status enableStablePrivacyAddresses(const std::string& iface,
-                                                                 GetPropertyFn getProperty,
-                                                                 SetPropertyFn setProperty);
+  static android::netdutils::Status enableStablePrivacyAddresses(
+          const std::string& iface,
+          const GetPropertyFn& getProperty,
+          const SetPropertyFn& setProperty);
 
   static void setAcceptRA(const char* value);
   static void setAcceptRARouteTable(int tableOrOffset);

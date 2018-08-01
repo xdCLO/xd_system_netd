@@ -26,7 +26,7 @@
 #include <android-base/file.h>
 #include <android-base/properties.h>
 #include <android-base/stringprintf.h>
-#include <cutils/log.h>
+#include <log/log.h>
 #include <logwrap/logwrap.h>
 #include <netutils/ifc.h>
 
@@ -54,10 +54,10 @@ using android::netdutils::toString;
 
 namespace {
 
+const char ipv4_proc_path[] = "/proc/sys/net/ipv4/conf";
 const char ipv6_proc_path[] = "/proc/sys/net/ipv6/conf";
 
 const char ipv4_neigh_conf_dir[] = "/proc/sys/net/ipv4/neigh";
-
 const char ipv6_neigh_conf_dir[] = "/proc/sys/net/ipv6/neigh";
 
 const char proc_net_path[] = "/proc/sys/net";
@@ -107,8 +107,9 @@ int writeValueToPath(
 }
 
 // Run @fn on each interface as well as 'default' in the path @dirname.
-void forEachInterface(const std::string& dirname,
-                      std::function<void(const std::string& path, const std::string& iface)> fn) {
+void forEachInterface(
+        const std::string& dirname,
+        const std::function<void(const std::string& path, const std::string& iface)>& fn) {
     // Run on default, which controls the behavior of any interfaces that are created in the future.
     fn(dirname, "default");
     DIR* dir = opendir(dirname.c_str());
@@ -190,7 +191,9 @@ Status setProperty(const std::string& key, const std::string& val) {
 }  // namespace
 
 android::netdutils::Status InterfaceController::enableStablePrivacyAddresses(
-        const std::string& iface, GetPropertyFn getProperty, SetPropertyFn setProperty) {
+        const std::string& iface,
+        const GetPropertyFn& getProperty,
+        const SetPropertyFn& setProperty) {
     const auto& sys = sSyscalls.get();
     const std::string procTarget = std::string(ipv6_proc_path) + "/" + iface + "/stable_secret";
     auto procFd = sys.open(procTarget, O_CLOEXEC | O_WRONLY);
@@ -245,8 +248,11 @@ void InterfaceController::initializeAll() {
     setBaseReachableTimeMs(15 * 1000);
 
     // When sending traffic via a given interface use only addresses configured
-       // on that interface as possible source addresses.
+    // on that interface as possible source addresses.
     setIPv6UseOutgoingInterfaceAddrsOnly("1");
+
+    // Ensure that ICMP redirects are rejected globally on all interfaces.
+    disableIcmpRedirects();
 }
 
 int InterfaceController::setEnableIPv6(const char *interface, const int on) {
@@ -356,6 +362,15 @@ int InterfaceController::addAddress(const char *interface,
 int InterfaceController::delAddress(const char *interface,
         const char *addrString, int prefixLength) {
     return ifc_del_address(interface, addrString, prefixLength);
+}
+
+int InterfaceController::disableIcmpRedirects() {
+    int rv = 0;
+    rv |= writeValueToPath(ipv4_proc_path, "all", "accept_redirects", "0");
+    rv |= writeValueToPath(ipv6_proc_path, "all", "accept_redirects", "0");
+    setOnAllInterfaces(ipv4_proc_path, "accept_redirects", "0");
+    setOnAllInterfaces(ipv6_proc_path, "accept_redirects", "0");
+    return rv;
 }
 
 int InterfaceController::getParameter(

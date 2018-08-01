@@ -36,10 +36,11 @@
 #define LOG_TAG "TetherController"
 #include <android-base/strings.h>
 #include <android-base/stringprintf.h>
-#include <cutils/log.h>
 #include <cutils/properties.h>
+#include <log/log.h>
 #include <netdutils/StatusOr.h>
 
+#include "Controllers.h"
 #include "Fwmark.h"
 #include "NetdConstants.h"
 #include "Permission.h"
@@ -49,10 +50,10 @@
 #include "TetherController.h"
 
 using android::base::Join;
-using android::base::StringPrintf;
 using android::base::StringAppendF;
-using android::netdutils::StatusOr;
+using android::base::StringPrintf;
 using android::netdutils::statusFromErrno;
+using android::netdutils::StatusOr;
 
 namespace {
 
@@ -123,10 +124,29 @@ const std::string GET_TETHER_STATS_COMMAND = StringPrintf(
     "-nvx -L %s\n"
     "COMMIT\n", android::net::TetherController::LOCAL_TETHER_COUNTERS_CHAIN);
 
+int TetherController::DnsmasqState::sendCmd(int daemonFd, const std::string& cmd) {
+    if (cmd.empty()) return 0;
+
+    gLog.log("Sending update msg to dnsmasq [%s]", cmd.c_str());
+    // Send the trailing \0 as well.
+    if (write(daemonFd, cmd.c_str(), cmd.size() + 1) < 0) {
+        gLog.error("Failed to send update command to dnsmasq (%s)", strerror(errno));
+        errno = EREMOTEIO;
+        return -1;
+    }
+    return 0;
+}
+
+void TetherController::DnsmasqState::clear() {
+    update_ifaces_cmd.clear();
+    update_dns_cmd.clear();
+}
+
+int TetherController::DnsmasqState::sendAllState(int daemonFd) const {
+    return sendCmd(daemonFd, update_ifaces_cmd) | sendCmd(daemonFd, update_dns_cmd);
+}
+
 TetherController::TetherController() {
-    mDnsNetId = 0;
-    mDaemonFd = -1;
-    mDaemonPid = 0;
     if (inBpToolsMode()) {
         enableForwarding(BP_TOOLS_MODE);
     } else {
@@ -134,19 +154,20 @@ TetherController::TetherController() {
     }
 }
 
-TetherController::~TetherController() {
-    mInterfaces.clear();
-    mDnsForwarders.clear();
-    mForwardingRequests.clear();
-    mFwdIfaces.clear();
-}
-
 bool TetherController::setIpFwdEnabled() {
     bool success = true;
-    const char* value = mForwardingRequests.empty() ? "0" : "1";
+    bool disable = mForwardingRequests.empty();
+    const char* value = disable ? "0" : "1";
     ALOGD("Setting IP forward enable = %s", value);
     success &= writeToFile(IPV4_FORWARDING_PROC_FILE, value);
     success &= writeToFile(IPV6_FORWARDING_PROC_FILE, value);
+    if (disable) {
+        // Turning off the forwarding sysconf in the kernel has the side effect
+        // of turning on ICMP redirect, which is a security hazard.
+        // Turn ICMP redirect back off immediately.
+        int rv = InterfaceController::disableIcmpRedirects();
+        success &= (rv == 0);
+    }
     return success;
 }
 
@@ -269,6 +290,7 @@ int TetherController::stopTethering() {
     mDaemonPid = 0;
     close(mDaemonFd);
     mDaemonFd = -1;
+    mDnsmasqState.clear();
     ALOGD("Tethering services stopped");
     return 0;
 }
@@ -277,11 +299,13 @@ bool TetherController::isTetheringStarted() {
     return (mDaemonPid == 0 ? false : true);
 }
 
-#define MAX_CMD_SIZE 1024
+// dnsmasq can't parse commands larger than this due to the fixed-size buffer
+// in check_android_listeners(). The receiving buffer is 1024 bytes long, but
+// dnsmasq reads up to 1023 bytes.
+#define MAX_CMD_SIZE 1023
 
 int TetherController::setDnsForwarders(unsigned netId, char **servers, int numServers) {
     int i;
-    char daemonCmd[MAX_CMD_SIZE];
 
     Fwmark fwmark;
     fwmark.netId = netId;
@@ -289,8 +313,7 @@ int TetherController::setDnsForwarders(unsigned netId, char **servers, int numSe
     fwmark.protectedFromVpn = true;
     fwmark.permission = PERMISSION_SYSTEM;
 
-    snprintf(daemonCmd, sizeof(daemonCmd), "update_dns%s0x%x", SEPARATOR, fwmark.intValue);
-    int cmdLen = strlen(daemonCmd);
+    std::string daemonCmd = StringPrintf("update_dns%s0x%x", SEPARATOR, fwmark.intValue);
 
     mDnsForwarders.clear();
     for (i = 0; i < numServers; i++) {
@@ -306,22 +329,20 @@ int TetherController::setDnsForwarders(unsigned netId, char **servers, int numSe
             return -1;
         }
 
-        cmdLen += (strlen(servers[i]) + 1);
-        if (cmdLen + 1 >= MAX_CMD_SIZE) {
-            ALOGD("Too many DNS servers listed");
+        if (daemonCmd.size() + 1 + strlen(servers[i]) >= MAX_CMD_SIZE) {
+            ALOGE("Too many DNS servers listed");
             break;
         }
 
-        strcat(daemonCmd, SEPARATOR);
-        strcat(daemonCmd, servers[i]);
+        daemonCmd += SEPARATOR;
+        daemonCmd += servers[i];
         mDnsForwarders.push_back(servers[i]);
     }
 
     mDnsNetId = netId;
+    mDnsmasqState.update_dns_cmd = std::move(daemonCmd);
     if (mDaemonFd != -1) {
-        ALOGD("Sending update msg to dnsmasq [%s]", daemonCmd);
-        if (write(mDaemonFd, daemonCmd, strlen(daemonCmd) +1) < 0) {
-            ALOGE("Failed to send update command to dnsmasq (%s)", strerror(errno));
+        if (mDnsmasqState.sendAllState(mDaemonFd) != 0) {
             mDnsForwarders.clear();
             errno = EREMOTEIO;
             return -1;
@@ -339,30 +360,25 @@ const std::list<std::string> &TetherController::getDnsForwarders() const {
 }
 
 bool TetherController::applyDnsInterfaces() {
-    char daemonCmd[MAX_CMD_SIZE];
-
-    strcpy(daemonCmd, "update_ifaces");
-    int cmdLen = strlen(daemonCmd);
+    std::string daemonCmd = "update_ifaces";
     bool haveInterfaces = false;
 
-    for (const auto &ifname : mInterfaces) {
-        cmdLen += (ifname.size() + 1);
-        if (cmdLen + 1 >= MAX_CMD_SIZE) {
-            ALOGD("Too many DNS ifaces listed");
+    for (const auto& ifname : mInterfaces) {
+        if (daemonCmd.size() + 1 + ifname.size() >= MAX_CMD_SIZE) {
+            ALOGE("Too many DNS servers listed");
             break;
         }
 
-        strcat(daemonCmd, SEPARATOR);
-        strcat(daemonCmd, ifname.c_str());
+        daemonCmd += SEPARATOR;
+        daemonCmd += ifname;
         haveInterfaces = true;
     }
 
-    if ((mDaemonFd != -1) && haveInterfaces) {
-        ALOGD("Sending update msg to dnsmasq [%s]", daemonCmd);
-        if (write(mDaemonFd, daemonCmd, strlen(daemonCmd) +1) < 0) {
-            ALOGE("Failed to send update command to dnsmasq (%s)", strerror(errno));
-            return false;
-        }
+    if (!haveInterfaces) {
+        mDnsmasqState.update_ifaces_cmd.clear();
+    } else {
+        mDnsmasqState.update_ifaces_cmd = std::move(daemonCmd);
+        if (mDaemonFd != -1) return (mDnsmasqState.sendAllState(mDaemonFd) == 0);
     }
     return true;
 }

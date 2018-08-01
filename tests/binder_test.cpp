@@ -150,9 +150,9 @@ static int randomUid() {
 
 static std::vector<std::string> runCommand(const std::string& command) {
     std::vector<std::string> lines;
-    FILE *f;
 
-    if ((f = popen(command.c_str(), "r")) == nullptr) {
+    FILE *f = popen(command.c_str(), "r");  // NOLINT(cert-env33-c)
+    if (f == nullptr) {
         perror("popen");
         return lines;
     }
@@ -186,9 +186,9 @@ static int iptablesRuleLineLength(const char *binary, const char *chainName) {
 
 static bool iptablesRuleExists(const char *binary,
                                const char *chainName,
-                               const std::string expectedRule) {
+                               const std::string& expectedRule) {
     std::vector<std::string> rules = listIptablesRule(binary, chainName);
-    for(std::string &rule: rules) {
+    for (const auto& rule : rules) {
         if(rule.find(expectedRule) != std::string::npos) {
             return true;
         }
@@ -220,7 +220,7 @@ TEST_F(BinderTest, TestFirewallReplaceUidChain) {
     bool ret;
     {
         TimedOperation op(StringPrintf("Programming %d-UID whitelist chain", kNumUids));
-        mNetd->firewallReplaceUidChain(String16(chainName.c_str()), true, uids, &ret);
+        mNetd->firewallReplaceUidChain(chainName, true, uids, &ret);
     }
     EXPECT_EQ(true, ret);
     EXPECT_EQ((int) uids.size() + 9, iptablesRuleLineLength(IPTABLES_PATH, chainName.c_str()));
@@ -229,7 +229,7 @@ TEST_F(BinderTest, TestFirewallReplaceUidChain) {
     EXPECT_EQ(true, iptablesEspAllowRuleExists(chainName.c_str()));
     {
         TimedOperation op("Clearing whitelist chain");
-        mNetd->firewallReplaceUidChain(String16(chainName.c_str()), false, noUids, &ret);
+        mNetd->firewallReplaceUidChain(chainName, false, noUids, &ret);
     }
     EXPECT_EQ(true, ret);
     EXPECT_EQ(5, iptablesRuleLineLength(IPTABLES_PATH, chainName.c_str()));
@@ -237,7 +237,7 @@ TEST_F(BinderTest, TestFirewallReplaceUidChain) {
 
     {
         TimedOperation op(StringPrintf("Programming %d-UID blacklist chain", kNumUids));
-        mNetd->firewallReplaceUidChain(String16(chainName.c_str()), false, uids, &ret);
+        mNetd->firewallReplaceUidChain(chainName, false, uids, &ret);
     }
     EXPECT_EQ(true, ret);
     EXPECT_EQ((int) uids.size() + 5, iptablesRuleLineLength(IPTABLES_PATH, chainName.c_str()));
@@ -247,7 +247,7 @@ TEST_F(BinderTest, TestFirewallReplaceUidChain) {
 
     {
         TimedOperation op("Clearing blacklist chain");
-        mNetd->firewallReplaceUidChain(String16(chainName.c_str()), false, noUids, &ret);
+        mNetd->firewallReplaceUidChain(chainName, false, noUids, &ret);
     }
     EXPECT_EQ(true, ret);
     EXPECT_EQ(5, iptablesRuleLineLength(IPTABLES_PATH, chainName.c_str()));
@@ -255,16 +255,16 @@ TEST_F(BinderTest, TestFirewallReplaceUidChain) {
 
     // Check that the call fails if iptables returns an error.
     std::string veryLongStringName = "netd_binder_test_UnacceptablyLongIptablesChainName";
-    mNetd->firewallReplaceUidChain(String16(veryLongStringName.c_str()), true, noUids, &ret);
+    mNetd->firewallReplaceUidChain(veryLongStringName, true, noUids, &ret);
     EXPECT_EQ(false, ret);
 }
 
 TEST_F(BinderTest, TestVirtualTunnelInterface) {
-    static const struct TestData {
-        const std::string& family;
-        const std::string& deviceName;
-        const std::string& localAddress;
-        const std::string& remoteAddress;
+    const struct TestData {
+        const std::string family;
+        const std::string deviceName;
+        const std::string localAddress;
+        const std::string remoteAddress;
         int32_t iKey;
         int32_t oKey;
     } kTestData[] = {
@@ -439,7 +439,7 @@ static bool ipRuleExistsForRange(const uint32_t priority, const UidRange& range,
     std::string prefix = StringPrintf("%" PRIu32 ":", priority);
     std::string suffix = StringPrintf(" iif lo uidrange %d-%d %s\n",
             range.getStart(), range.getStop(), action.c_str());
-    for (std::string line : rules) {
+    for (const auto& line : rules) {
         if (android::base::StartsWith(line, prefix) && android::base::EndsWith(line, suffix)) {
             return true;
         }
@@ -538,7 +538,7 @@ TEST_F(BinderTest, TestNetworkRejectNonSecureVpn) {
 
 // Create a socket pair that isLoopbackSocket won't think is local.
 void BinderTest::fakeRemoteSocketPair(int *clientSocket, int *serverSocket, int *acceptedSocket) {
-    *serverSocket = socket(AF_INET6, SOCK_STREAM, 0);
+    *serverSocket = socket(AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
     struct sockaddr_in6 server6 = { .sin6_family = AF_INET6, .sin6_addr = sTun.dstAddr() };
     ASSERT_EQ(0, bind(*serverSocket, (struct sockaddr *) &server6, sizeof(server6)));
 
@@ -546,13 +546,13 @@ void BinderTest::fakeRemoteSocketPair(int *clientSocket, int *serverSocket, int 
     ASSERT_EQ(0, getsockname(*serverSocket, (struct sockaddr *) &server6, &addrlen));
     ASSERT_EQ(0, listen(*serverSocket, 10));
 
-    *clientSocket = socket(AF_INET6, SOCK_STREAM, 0);
+    *clientSocket = socket(AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
     struct sockaddr_in6 client6 = { .sin6_family = AF_INET6, .sin6_addr = sTun.srcAddr() };
     ASSERT_EQ(0, bind(*clientSocket, (struct sockaddr *) &client6, sizeof(client6)));
     ASSERT_EQ(0, connect(*clientSocket, (struct sockaddr *) &server6, sizeof(server6)));
     ASSERT_EQ(0, getsockname(*clientSocket, (struct sockaddr *) &client6, &addrlen));
 
-    *acceptedSocket = accept(*serverSocket, (struct sockaddr *) &server6, &addrlen);
+    *acceptedSocket = accept4(*serverSocket, (struct sockaddr *) &server6, &addrlen, SOCK_CLOEXEC);
     ASSERT_NE(-1, *acceptedSocket);
 
     ASSERT_EQ(0, memcmp(&client6, &server6, sizeof(client6)));
@@ -890,12 +890,13 @@ void expectNoTestCounterRules() {
     }
 }
 
-void addTetherCounterValues(const char *path, std::string if1, std::string if2, int byte, int pkt) {
+void addTetherCounterValues(const char* path, const std::string& if1, const std::string& if2,
+                            int byte, int pkt) {
     runCommand(StringPrintf("%s -w -A tetherctrl_counters -i %s -o %s -j RETURN -c %d %d",
                             path, if1.c_str(), if2.c_str(), pkt, byte));
 }
 
-void delTetherCounterValues(const char *path, std::string if1, std::string if2) {
+void delTetherCounterValues(const char* path, const std::string& if1, const std::string& if2) {
     runCommand(StringPrintf("%s -w -D tetherctrl_counters -i %s -o %s -j RETURN",
                             path, if1.c_str(), if2.c_str()));
     runCommand(StringPrintf("%s -w -D tetherctrl_counters -i %s -o %s -j RETURN",

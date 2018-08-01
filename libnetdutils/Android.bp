@@ -2,6 +2,7 @@ cc_library {
     name: "libnetdutils",
     srcs: [
         "Fd.cpp",
+        "Log.cpp",
         "Netfilter.cpp",
         "Netlink.cpp",
         "Slice.cpp",
@@ -12,6 +13,7 @@ cc_library {
         "UniqueFd.cpp",
         "UniqueFile.cpp",
     ],
+    defaults: ["netd_defaults"],
     cflags: ["-Wall", "-Werror"],
     shared_libs: [
         "libbase",
@@ -29,20 +31,24 @@ cc_test {
     srcs: [
         "BackoffSequenceTest.cpp",
         "FdTest.cpp",
+        "LogTest.cpp",
         "MemBlockTest.cpp",
         "OperationLimiterTest.cpp",
         "SliceTest.cpp",
         "StatusTest.cpp",
         "SyscallsTest.cpp",
     ],
+    defaults: ["netd_defaults"],
     cflags: [
         "-Wall",
         "-Werror",
         "-Wno-error=unused-variable",
     ],
-    static_libs: ["libgmock"],
+    static_libs: [
+        "libgmock",
+        "libnetdutils",
+    ],
     shared_libs: [
         "libbase",
-        "libnetdutils",
     ],
 }

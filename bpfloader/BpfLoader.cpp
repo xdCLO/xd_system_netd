@@ -39,7 +39,7 @@
 
 #include <android-base/stringprintf.h>
 #include <android-base/unique_fd.h>
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include <netdutils/MemBlock.h>
 #include <netdutils/Misc.h>
@@ -114,6 +114,8 @@ MemBlock cgroupIngressProg;
 MemBlock cgroupEgressProg;
 MemBlock xtIngressProg;
 MemBlock xtEgressProg;
+MemBlock xtWhiteListProg;
+MemBlock xtBlackListProg;
 
 MemBlock getProgFromMem(Slice buffer, Elf64_Shdr* section) {
     uint64_t progSize = (uint64_t)section->sh_size;
@@ -128,7 +130,7 @@ MemBlock getProgFromMem(Slice buffer, Elf64_Shdr* section) {
 }
 
 void parseProgramsFromFile(const char* path) {
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd == -1) {
         FAIL("Failed to open %s program: %s", path, strerror(errno));
     }
@@ -192,6 +194,10 @@ void parseProgramsFromFile(const char* path) {
             xtIngressProg = getProgFromMem(buffer, sectionPtr);
         } else if (!strcmp((char *)nameSlice.base(), XT_BPF_EGRESS_PROG_NAME)) {
             xtEgressProg = getProgFromMem(buffer, sectionPtr);
+        } else if (!strcmp((char*)nameSlice.base(), XT_BPF_WHITELIST_PROG_NAME)) {
+            xtWhiteListProg = getProgFromMem(buffer, sectionPtr);
+        } else if (!strcmp((char*)nameSlice.base(), XT_BPF_BLACKLIST_PROG_NAME)) {
+            xtBlackListProg = getProgFromMem(buffer, sectionPtr);
         }
     }
 }
@@ -224,8 +230,7 @@ int loadProg(Slice prog, bpf_prog_type type, const std::vector<ReplacePattern>& 
 }
 
 int loadAndAttachProgram(bpf_attach_type type, const char* path, const char* name,
-                         std::vector<ReplacePattern> mapPatterns) {
-
+                         const std::vector<ReplacePattern>& mapPatterns) {
     unique_fd fd;
     if (type == BPF_CGROUP_INET_INGRESS) {
         fd.reset(loadProg(cgroupIngressProg, BPF_PROG_TYPE_CGROUP_SKB, mapPatterns));
@@ -235,6 +240,10 @@ int loadAndAttachProgram(bpf_attach_type type, const char* path, const char* nam
         fd.reset(loadProg(xtIngressProg, BPF_PROG_TYPE_SOCKET_FILTER, mapPatterns));
     } else if (!strcmp(name, XT_BPF_EGRESS_PROG_NAME)) {
         fd.reset(loadProg(xtEgressProg, BPF_PROG_TYPE_SOCKET_FILTER, mapPatterns));
+    } else if (!strcmp(name, XT_BPF_WHITELIST_PROG_NAME)) {
+        fd.reset(loadProg(xtWhiteListProg, BPF_PROG_TYPE_SOCKET_FILTER, mapPatterns));
+    } else if (!strcmp(name, XT_BPF_BLACKLIST_PROG_NAME)) {
+        fd.reset(loadProg(xtBlackListProg, BPF_PROG_TYPE_SOCKET_FILTER, mapPatterns));
     } else {
         FAIL("Unrecognized program type: %s", name);
     }
@@ -265,6 +274,7 @@ int loadAndAttachProgram(bpf_attach_type type, const char* path, const char* nam
 }  // namespace android
 
 using android::bpf::APP_UID_STATS_MAP_PATH;
+using android::bpf::BANDWIDTH_UID_MAP_PATH;
 using android::bpf::BPF_EGRESS_PROG_PATH;
 using android::bpf::BPF_INGRESS_PROG_PATH;
 using android::bpf::COOKIE_TAG_MAP_PATH;
@@ -275,18 +285,23 @@ using android::bpf::STANDBY_UID_MAP_PATH;
 using android::bpf::TAG_STATS_MAP_PATH;
 using android::bpf::UID_COUNTERSET_MAP_PATH;
 using android::bpf::UID_STATS_MAP_PATH;
+using android::bpf::XT_BPF_BLACKLIST_PROG_PATH;
 using android::bpf::XT_BPF_EGRESS_PROG_PATH;
 using android::bpf::XT_BPF_INGRESS_PROG_PATH;
+using android::bpf::XT_BPF_WHITELIST_PROG_PATH;
 
 using android::bpf::ReplacePattern;
 using android::bpf::loadAndAttachProgram;
 
 static void usage(void) {
-    ALOGE( "Usage: ./bpfloader [-i] [-e]\n"
-           "   -i load ingress bpf program\n"
-           "   -e load egress bpf program\n"
-           "   -p load prerouting xt_bpf program\n"
-           "   -m load mangle xt_bpf program\n");
+    ALOGE(
+        "Usage: ./bpfloader [-i] [-e]\n"
+        "   -i load ingress bpf program\n"
+        "   -e load egress bpf program\n"
+        "   -p load prerouting xt_bpf program\n"
+        "   -m load mangle xt_bpf program\n"
+        "   -w load bandwidth whitelist program\n"
+        "   -b load bandwidth blacklist program\n");
 }
 
 int main(int argc, char** argv) {
@@ -300,6 +315,7 @@ int main(int argc, char** argv) {
     DECLARE_MAP(dozableUidMap, DOZABLE_UID_MAP_PATH);
     DECLARE_MAP(standbyUidMap, STANDBY_UID_MAP_PATH);
     DECLARE_MAP(powerSaveUidMap, POWERSAVE_UID_MAP_PATH);
+    DECLARE_MAP(bandwidthUidMap, BANDWIDTH_UID_MAP_PATH);
 
     const std::vector<ReplacePattern> mapPatterns = {
         ReplacePattern(COOKIE_TAG_MAP, cookieTagMap.get()),
@@ -311,11 +327,13 @@ int main(int argc, char** argv) {
         ReplacePattern(DOZABLE_UID_MAP, dozableUidMap.get()),
         ReplacePattern(STANDBY_UID_MAP, standbyUidMap.get()),
         ReplacePattern(POWERSAVE_UID_MAP, powerSaveUidMap.get()),
+        ReplacePattern(BANDWIDTH_UID_MAP, bandwidthUidMap.get()),
     };
 
     int opt;
     bool doIngress = false, doEgress = false, doPrerouting = false, doMangle = false;
-    while ((opt = getopt(argc, argv, "iepm")) != -1) {
+    bool doWhitelist = false, doBlacklist = false;
+    while ((opt = getopt(argc, argv, "iepmwb")) != -1) {
         switch (opt) {
             case 'i':
                 doIngress = true;
@@ -328,6 +346,12 @@ int main(int argc, char** argv) {
                 break;
             case 'm':
                 doMangle = true;
+                break;
+            case 'w':
+                doWhitelist = true;
+                break;
+            case 'b':
+                doBlacklist = true;
                 break;
             default:
                 usage();
@@ -362,6 +386,20 @@ int main(int argc, char** argv) {
                                    XT_BPF_EGRESS_PROG_NAME, mapPatterns);
         if (ret) {
             FAIL("Failed to set up xt_bpf program");
+        }
+    }
+    if (doWhitelist) {
+        ret = loadAndAttachProgram(MAX_BPF_ATTACH_TYPE, XT_BPF_WHITELIST_PROG_PATH,
+                                   XT_BPF_WHITELIST_PROG_NAME, mapPatterns);
+        if (ret) {
+            FAIL("Failed to set up xt_bpf Whitelist program");
+        }
+    }
+    if (doBlacklist) {
+        ret = loadAndAttachProgram(MAX_BPF_ATTACH_TYPE, XT_BPF_BLACKLIST_PROG_PATH,
+                                   XT_BPF_BLACKLIST_PROG_NAME, mapPatterns);
+        if (ret) {
+            FAIL("Failed to set up xt_bpf blacklist program");
         }
     }
     return ret;

@@ -29,8 +29,6 @@
 namespace android {
 namespace net {
 
-using android::netdutils::StatusOr;
-
 class TetherController {
 private:
     struct ForwardingDownstream {
@@ -46,16 +44,29 @@ private:
 
     // NetId to use for forwarded DNS queries. This may not be the default
     // network, e.g., in the case where we are tethering to a DUN APN.
-    unsigned               mDnsNetId;
+    unsigned               mDnsNetId = 0;
     std::list<std::string> mDnsForwarders;
-    pid_t                  mDaemonPid;
-    int                    mDaemonFd;
+    pid_t                  mDaemonPid = 0;
+    int                    mDaemonFd = -1;
     std::set<std::string>  mForwardingRequests;
 
-public:
+    struct DnsmasqState {
+        static int sendCmd(int daemonFd, const std::string& cmd);
 
+        // List of downstream interfaces on which to serve. The format used is:
+        //     update_ifaces|<ifname1>|<ifname2>|...
+        std::string update_ifaces_cmd;
+        // Forwarding (upstream) DNS configuration to use. The format used is:
+        //     update_dns|<hex_socket_mark>|<ip1>|<ip2>|...
+        std::string update_dns_cmd;
+
+        void clear();
+        int sendAllState(int daemonFd) const;
+    } mDnsmasqState{};
+
+  public:
     TetherController();
-    virtual ~TetherController();
+    ~TetherController() = default;
 
     bool enableForwarding(const char* requester);
     bool disableForwarding(const char* requester);
@@ -108,7 +119,7 @@ public:
 
     typedef std::vector<TetherStats> TetherStatsList;
 
-    StatusOr<TetherStatsList> getTetherStats();
+    netdutils::StatusOr<TetherStatsList> getTetherStats();
 
     /*
      * extraProcessingInfo: contains raw parsed data, and error info.

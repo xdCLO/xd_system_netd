@@ -27,7 +27,7 @@
 
 #include <android-base/strings.h>
 #include <android-base/stringprintf.h>
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "Controllers.h"
 #include "FirewallController.h"
@@ -247,7 +247,7 @@ int FirewallController::setUidRule(ChildChain chain, int uid, FirewallRule rule)
     }
 
     std::string command = "*filter\n";
-    for (std::string chainName : chainNames) {
+    for (const std::string& chainName : chainNames) {
         StringAppendF(&command, "%s %s -m owner --uid-owner %d -j %s\n",
                       op, chainName.c_str(), uid, target);
     }
@@ -329,11 +329,11 @@ std::string FirewallController::makeUidRules(IptablesTarget target, const char *
 }
 
 int FirewallController::replaceUidChain(
-        const char *name, bool isWhitelist, const std::vector<int32_t>& uids) {
+        const std::string &name, bool isWhitelist, const std::vector<int32_t>& uids) {
    if (mUseBpfOwnerMatch) {
        return gCtls->trafficCtrl.replaceUidOwnerMap(name, isWhitelist, uids);
    }
-   std::string commands4 = makeUidRules(V4, name, isWhitelist, uids);
-   std::string commands6 = makeUidRules(V6, name, isWhitelist, uids);
+   std::string commands4 = makeUidRules(V4, name.c_str(), isWhitelist, uids);
+   std::string commands6 = makeUidRules(V6, name.c_str(), isWhitelist, uids);
    return execIptablesRestore(V4, commands4.c_str()) | execIptablesRestore(V6, commands6.c_str());
 }

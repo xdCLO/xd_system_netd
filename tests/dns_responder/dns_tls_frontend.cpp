@@ -143,6 +143,10 @@ bool DnsTlsFrontend::startServer() {
     SSL_load_error_strings();
     OpenSSL_add_ssl_algorithms();
 
+    // reset queries_ to 0 every time startServer called
+    // which would help us easy to check queries_ via calling waitForQueries
+    queries_ = 0;
+
     ctx_.reset(SSL_CTX_new(TLS_server_method()));
     if (!ctx_) {
         ALOGE("SSL context creation failed");
@@ -277,7 +281,7 @@ void DnsTlsFrontend::requestHandler() {
         socklen_t len = sizeof(addr);
 
         ALOGD("Trying to accept a client");
-        int client = accept(socket_, reinterpret_cast<sockaddr*>(&addr), &len);
+        int client = accept4(socket_, reinterpret_cast<sockaddr*>(&addr), &len, SOCK_CLOEXEC);
         ALOGD("Got client socket %d", client);
         if (client < 0) {
             // Stop

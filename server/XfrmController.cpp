@@ -57,8 +57,9 @@
 #include <android-base/strings.h>
 #include <android-base/unique_fd.h>
 #include <android/net/INetd.h>
-#include <cutils/log.h>
 #include <cutils/properties.h>
+#include <log/log.h>
+#include <log/log_properties.h>
 #include <logwrap/logwrap.h>
 
 using android::net::INetd;
@@ -187,7 +188,7 @@ size_t fillNlAttrU32(__u16 nlaType, int32_t value, nlattr* nlAttr, uint32_t* u32
 }
 
 // returns the address family, placing the string in the provided buffer
-StatusOr<uint16_t> convertStringAddress(std::string addr, uint8_t* buffer) {
+StatusOr<uint16_t> convertStringAddress(const std::string& addr, uint8_t* buffer) {
     if (inet_pton(AF_INET, addr.c_str(), buffer) == 1) {
         return AF_INET;
     } else if (inet_pton(AF_INET6, addr.c_str(), buffer) == 1) {
@@ -395,7 +396,7 @@ netdutils::Status XfrmController::flushInterfaces() {
     for (const std::string& iface : ifaces.value()) {
         int status = 0;
         // Look for the reserved interface prefix, which must be in the name at position 0
-        if (!iface.compare(0, ifPrefix8.length(), ifPrefix8.c_str()) &&
+        if (android::base::StartsWith(iface.c_str(), ifPrefix8.c_str()) &&
             (status = removeVirtualTunnelInterface(iface)) < 0) {
             ALOGE("Failed to delete ipsec tunnel %s.", iface.c_str());
             return netdutils::statusFromErrno(status, "Failed to remove ipsec tunnel.");

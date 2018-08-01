@@ -19,7 +19,6 @@
 #include <string.h>
 
 #include <sys/socket.h>
-#include <sys/select.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/un.h>
@@ -29,7 +28,7 @@
 
 #define LOG_TAG "Netd"
 
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include <linux/netfilter/nfnetlink.h>
 #include <linux/netfilter/nfnetlink_log.h>
