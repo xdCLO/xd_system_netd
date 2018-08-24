@@ -33,6 +33,34 @@
 #define BPF_PASS 1
 #define BPF_DROP 0
 
+#define ptr_to_u64(x) ((uint64_t)(uintptr_t)(x))
+#define DEFAULT_LOG_LEVEL 1
+
+#define MAP_LD_CMD_HEAD 0x18
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof(*(a)))
+
+// The BPF instruction bytes that we need to replace. x is a placeholder (e.g., COOKIE_TAG_MAP).
+#define BPF_MAP_SEARCH_PATTERN(x)                                                               \
+    {                                                                                           \
+        0x18, 0x01, 0x00, 0x00,                                                                 \
+        (x)[0], (x)[1], (x)[2], (x)[3],                                                         \
+        0x00, 0x00, 0x00, 0x00,                                                                 \
+        (x)[4], (x)[5], (x)[6], (x)[7]                                                          \
+    }
+
+// The bytes we'll replace them with. x is the actual fd number for the map at runtime.
+// The second byte is changed from 0x01 to 0x11 since 0x11 is the special command used
+// for bpf map fd loading. The original 0x01 is only a normal load command.
+#define BPF_MAP_REPLACE_PATTERN(x)                                                              \
+    {                                                                                           \
+        0x18, 0x11, 0x00, 0x00,                                                                 \
+        (x)[0], (x)[1], (x)[2], (x)[3],                                                         \
+        0x00, 0x00, 0x00, 0x00,                                                                 \
+        (x)[4], (x)[5], (x)[6], (x)[7]                                                          \
+    }
+
+#define MAP_CMD_SIZE 16
+
 namespace android {
 namespace bpf {
 
@@ -66,6 +94,31 @@ struct Stats {
 
 struct IfaceValue {
     char name[IFNAMSIZ];
+};
+
+struct BpfProgInfo {
+    bpf_attach_type attachType;
+    const char* path;
+    const char* name;
+    bpf_prog_type loadType;
+    base::unique_fd fd;
+};
+
+int mapRetrieve(const char* pathname, uint32_t flags);
+
+struct BpfMapInfo {
+    std::array<uint8_t, MAP_CMD_SIZE> search;
+    std::array<uint8_t, MAP_CMD_SIZE> replace;
+    const int fd;
+    std::string path;
+
+    BpfMapInfo(uint64_t dummyFd, const char* mapPath)
+        : BpfMapInfo(dummyFd, android::bpf::mapRetrieve(mapPath, 0)) {}
+
+    BpfMapInfo(uint64_t dummyFd, int realFd, const char* mapPath = "") : fd(realFd), path(mapPath) {
+        search = BPF_MAP_SEARCH_PATTERN((uint8_t*) &dummyFd);
+        replace = BPF_MAP_REPLACE_PATTERN((uint8_t*) &realFd);
+    }
 };
 
 #ifndef DEFAULT_OVERFLOWUID
@@ -104,6 +157,7 @@ constexpr const int UID_STATS_MAP_SIZE = 10000;
 constexpr const int TAG_STATS_MAP_SIZE = 10000;
 constexpr const int IFACE_INDEX_NAME_MAP_SIZE = 1000;
 constexpr const int IFACE_STATS_MAP_SIZE = 1000;
+constexpr const int CONFIGURATION_MAP_SIZE = 1;
 constexpr const int UID_OWNER_MAP_SIZE = 2000;
 
 constexpr const char* BPF_EGRESS_PROG_PATH = BPF_PATH "/egress_prog";
@@ -122,10 +176,8 @@ constexpr const char* UID_STATS_MAP_PATH = BPF_PATH "/traffic_uid_stats_map";
 constexpr const char* TAG_STATS_MAP_PATH = BPF_PATH "/traffic_tag_stats_map";
 constexpr const char* IFACE_INDEX_NAME_MAP_PATH = BPF_PATH "/traffic_iface_index_name_map";
 constexpr const char* IFACE_STATS_MAP_PATH = BPF_PATH "/traffic_iface_stats_map";
-constexpr const char* DOZABLE_UID_MAP_PATH = BPF_PATH "/traffic_dozable_uid_map";
-constexpr const char* STANDBY_UID_MAP_PATH = BPF_PATH "/traffic_standby_uid_map";
-constexpr const char* POWERSAVE_UID_MAP_PATH = BPF_PATH "/traffic_powersave_uid_map";
-constexpr const char* BANDWIDTH_UID_MAP_PATH = BPF_PATH "/traffic_bandwidth_uid_map";
+constexpr const char* CONFIGURATION_MAP_PATH = BPF_PATH "/traffic_configuration_map";
+constexpr const char* UID_OWNER_MAP_PATH = BPF_PATH "/traffic_uid_owner_map";
 
 constexpr const int OVERFLOW_COUNTERSET = 2;
 
@@ -142,12 +194,13 @@ int getNextMapKey(const base::unique_fd& map_fd, void* key, void* next_key);
 int getFirstMapKey(const base::unique_fd& map_fd, void* firstKey);
 int bpfProgLoad(bpf_prog_type prog_type, netdutils::Slice bpf_insns, const char* license,
                 uint32_t kern_version, netdutils::Slice bpf_log);
-int mapPin(const base::unique_fd& map_fd, const char* pathname);
-int mapRetrieve(const char* pathname, uint32_t flags);
+int bpfFdPin(const base::unique_fd& map_fd, const char* pathname);
 int attachProgram(bpf_attach_type type, uint32_t prog_fd, uint32_t cg_fd);
 int detachProgram(bpf_attach_type type, uint32_t cg_fd);
 uint64_t getSocketCookie(int sockFd);
 bool hasBpfSupport();
+int parseProgramsFromFile(const char* path, BpfProgInfo* programs, size_t size,
+                          const std::vector<BpfMapInfo>& mapPatterns);
 
 #define SKIP_IF_BPF_NOT_SUPPORTED     \
     do {                              \
@@ -160,6 +213,7 @@ constexpr int BPF_DELETED = 1;
 bool operator==(const StatsValue& lhs, const StatsValue& rhs);
 bool operator==(const UidTag& lhs, const UidTag& rhs);
 bool operator==(const StatsKey& lhs, const StatsKey& rhs);
+
 }  // namespace bpf
 }  // namespace android
 

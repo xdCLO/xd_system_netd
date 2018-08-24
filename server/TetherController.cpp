@@ -247,10 +247,10 @@ int TetherController::startTethering(int num_addrs, char **dhcp_ranges) {
             "--user", kDnsmasqUsername,
         };
 
+        // DHCP server will be disabled if num_addrs == 0 and no --dhcp-range is passed.
         for (int addrIndex = 0; addrIndex < num_addrs; addrIndex += 2) {
-            argVector.push_back(
-                    StringPrintf("--dhcp-range=%s,%s,1h",
-                                 dhcp_ranges[addrIndex], dhcp_ranges[addrIndex+1]));
+            argVector.push_back(StringPrintf("--dhcp-range=%s,%s,1h", dhcp_ranges[addrIndex],
+                                             dhcp_ranges[addrIndex + 1]));
         }
 
         auto args = (char**)std::calloc(argVector.size() + 1, sizeof(char*));
@@ -286,7 +286,7 @@ int TetherController::stopTethering() {
     ALOGD("Stopping tethering services");
 
     kill(mDaemonPid, SIGTERM);
-    waitpid(mDaemonPid, NULL, 0);
+    waitpid(mDaemonPid, nullptr, 0);
     mDaemonPid = 0;
     close(mDaemonFd);
     mDaemonFd = -1;
@@ -320,7 +320,7 @@ int TetherController::setDnsForwarders(unsigned netId, char **servers, int numSe
         ALOGD("setDnsForwarders(0x%x %d = '%s')", fwmark.intValue, i, servers[i]);
 
         addrinfo *res, hints = { .ai_flags = AI_NUMERICHOST };
-        int ret = getaddrinfo(servers[i], NULL, &hints, &res);
+        int ret = getaddrinfo(servers[i], nullptr, &hints, &res);
         freeaddrinfo(res);
         if (ret) {
             ALOGE("Failed to parse DNS server '%s'", servers[i]);

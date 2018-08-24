@@ -66,43 +66,43 @@ unsigned stringToNetId(const char* arg) {
     }
     // OEM NetIds are "oem1", "oem2", .., "oem50".
     if (!strncmp(arg, "oem", 3)) {
-        unsigned n = strtoul(arg + 3, NULL, 0);
+        unsigned n = strtoul(arg + 3, nullptr, 0);
         if (1 <= n && n <= NUM_OEM_IDS) {
             return NetworkController::MIN_OEM_ID + n;
         }
         return NETID_UNSET;
     } else if (!strncmp(arg, "handle", 6)) {
-        unsigned n = netHandleToNetId((net_handle_t)strtoull(arg + 6, NULL, 10));
+        unsigned n = netHandleToNetId((net_handle_t)strtoull(arg + 6, nullptr, 10));
         if (NetworkController::MIN_OEM_ID <= n && n <= NetworkController::MAX_OEM_ID) {
             return n;
         }
         return NETID_UNSET;
     }
     // strtoul() returns 0 on errors, which is fine because 0 is an invalid netId.
-    return strtoul(arg, NULL, 0);
+    return strtoul(arg, nullptr, 0);
 }
 
 class LockingFrameworkCommand : public FrameworkCommand {
 public:
-    LockingFrameworkCommand(FrameworkCommand *wrappedCmd, android::RWLock& lock) :
+    LockingFrameworkCommand(FrameworkCommand *wrappedCmd, std::mutex& lock) :
             FrameworkCommand(wrappedCmd->getCommand()),
             mWrappedCmd(wrappedCmd),
             mLock(lock) {}
 
     int runCommand(SocketClient *c, int argc, char **argv) {
-        android::RWLock::AutoWLock lock(mLock);
+        std::lock_guard lock(mLock);
         return mWrappedCmd->runCommand(c, argc, argv);
     }
 
 private:
     FrameworkCommand *mWrappedCmd;
-    android::RWLock& mLock;
+    std::mutex& mLock;
 };
 
 
 }  // namespace
 
-void CommandListener::registerLockingCmd(FrameworkCommand *cmd, android::RWLock& lock) {
+void CommandListener::registerLockingCmd(FrameworkCommand *cmd, std::mutex& lock) {
     registerCmd(new LockingFrameworkCommand(cmd, lock));
 }
 
@@ -114,12 +114,12 @@ CommandListener::CommandListener() : FrameworkListener(SOCKET_NAME, true) {
     registerLockingCmd(new ListTtysCmd());
     registerLockingCmd(new PppdCmd());
     registerLockingCmd(new BandwidthControlCmd(), gCtls->bandwidthCtrl.lock);
-    registerLockingCmd(new IdletimerControlCmd());
+    registerLockingCmd(new IdletimerControlCmd(), gCtls->idletimerCtrl.lock);
     registerLockingCmd(new ResolverCmd());
     registerLockingCmd(new FirewallCmd(), gCtls->firewallCtrl.lock);
-    registerLockingCmd(new ClatdCmd());
+    registerLockingCmd(new ClatdCmd(), gCtls->clatdCtrl.mutex);
     registerLockingCmd(new NetworkCommand());
-    registerLockingCmd(new StrictCmd());
+    registerLockingCmd(new StrictCmd(), gCtls->strictCtrl.lock);
 }
 
 CommandListener::InterfaceCmd::InterfaceCmd() :
@@ -188,7 +188,7 @@ int CommandListener::InterfaceCmd::runCommand(SocketClient *cli,
 
             asprintf(&flag_s, "%s%s%s%s%s%s", updown, brdcst, loopbk, ppp, running, multi);
 
-            char *msg = NULL;
+            char *msg = nullptr;
             asprintf(&msg, "%.2x:%.2x:%.2x:%.2x:%.2x:%.2x %s %d %s",
                      hwaddr[0], hwaddr[1], hwaddr[2], hwaddr[3], hwaddr[4], hwaddr[5],
                      addr_s, prefixLength, flag_s);
@@ -361,7 +361,7 @@ int CommandListener::IpFwdCmd::runCommand(SocketClient *cli, int argc, char **ar
         //   0     1
         // ipfwd status
         if (!strcmp(argv[1], "status")) {
-            char *tmp = NULL;
+            char *tmp = nullptr;
 
             asprintf(&tmp, "Forwarding %s",
                      ((gCtls->tetherCtrl.forwardingRequestCount() > 0) ? "enabled" : "disabled"));
@@ -425,7 +425,7 @@ int CommandListener::TetherCmd::runCommand(SocketClient *cli,
     if (!strcmp(argv[1], "stop")) {
         rc = gCtls->tetherCtrl.stopTethering();
     } else if (!strcmp(argv[1], "status")) {
-        char *tmp = NULL;
+        char *tmp = nullptr;
 
         asprintf(&tmp, "Tethering services %s",
                  (gCtls->tetherCtrl.isTetheringStarted() ? "started" : "stopped"));
@@ -446,6 +446,24 @@ int CommandListener::TetherCmd::runCommand(SocketClient *cli,
                 cli->sendMsg(ResponseCode::TetherDnsFwdTgtListResult, fwdr.c_str(), false);
             }
         }
+    } else if (!strcmp(argv[1], "start")) {
+        if (argc % 2 == 1) {
+            cli->sendMsg(ResponseCode::CommandSyntaxError, "Bad number of arguments", false);
+            return 0;
+        }
+
+        const int num_addrs = argc - 2;
+        // TODO: consider moving this validation into TetherController.
+        struct in_addr tmp_addr;
+        for (int arg_index = 2; arg_index < argc; arg_index++) {
+            if (!inet_aton(argv[arg_index], &tmp_addr)) {
+                cli->sendMsg(ResponseCode::CommandParameterError, "Invalid address", false);
+                return 0;
+            }
+        }
+
+        char** dhcp_ranges = num_addrs == 0 ? NULL : argv + 2;
+        rc = gCtls->tetherCtrl.startTethering(num_addrs, dhcp_ranges);
     } else {
         /*
          * These commands take a minimum of 4 arguments
@@ -455,24 +473,7 @@ int CommandListener::TetherCmd::runCommand(SocketClient *cli,
             return 0;
         }
 
-        if (!strcmp(argv[1], "start")) {
-            if (argc % 2 == 1) {
-                cli->sendMsg(ResponseCode::CommandSyntaxError, "Bad number of arguments", false);
-                return 0;
-            }
-
-            const int num_addrs = argc - 2;
-            // TODO: consider moving this validation into TetherController.
-            struct in_addr tmp_addr;
-            for (int arg_index = 2; arg_index < argc; arg_index++) {
-                if (!inet_aton(argv[arg_index], &tmp_addr)) {
-                    cli->sendMsg(ResponseCode::CommandParameterError, "Invalid address", false);
-                    return 0;
-                }
-            }
-
-            rc = gCtls->tetherCtrl.startTethering(num_addrs, &(argv[2]));
-        } else if (!strcmp(argv[1], "interface")) {
+        if (!strcmp(argv[1], "interface")) {
             if (!strcmp(argv[2], "add")) {
                 rc = gCtls->tetherCtrl.tetherInterface(argv[3]);
             } else if (!strcmp(argv[2], "remove")) {
@@ -657,7 +658,7 @@ bool CommandListener::ResolverCmd::parseAndExecuteSetNetDns(int netId, int argc,
         return false;
     }
     int end = argc;
-    __res_params params;
+    __res_params params = {};
     const __res_params* paramsPtr = nullptr;
     if (end > 6 && !strcmp(argv[end - 2], "--params")) {
         const char* paramsStr = argv[end - 1];
@@ -972,23 +973,6 @@ int CommandListener::IdletimerControlCmd::runCommand(SocketClient *cli, int argc
 
     ALOGV("idletimerctrlcmd: argc=%d %s %s ...", argc, argv[0], argv[1]);
 
-    if (!strcmp(argv[1], "enable")) {
-      if (0 != gCtls->idletimerCtrl.enableIdletimerControl()) {
-        cli->sendMsg(ResponseCode::CommandSyntaxError, "Missing argument", false);
-      } else {
-        cli->sendMsg(ResponseCode::CommandOkay, "Enable success", false);
-      }
-      return 0;
-
-    }
-    if (!strcmp(argv[1], "disable")) {
-      if (0 != gCtls->idletimerCtrl.disableIdletimerControl()) {
-        cli->sendMsg(ResponseCode::CommandSyntaxError, "Missing argument", false);
-      } else {
-        cli->sendMsg(ResponseCode::CommandOkay, "Disable success", false);
-      }
-      return 0;
-    }
     if (!strcmp(argv[1], "add")) {
         if (argc != 5) {
             cli->sendMsg(ResponseCode::CommandSyntaxError, "Missing argument", false);
@@ -1176,13 +1160,6 @@ int CommandListener::ClatdCmd::runCommand(SocketClient *cli, int argc,
 
     if (!strcmp(argv[1], "stop")) {
         rc = gCtls->clatdCtrl.stopClatd(argv[2]);
-    } else if (!strcmp(argv[1], "status")) {
-        char *tmp = NULL;
-        asprintf(&tmp, "Clatd status: %s", (gCtls->clatdCtrl.isClatdStarted(argv[2]) ?
-                                            "started" : "stopped"));
-        cli->sendMsg(ResponseCode::ClatdStatusResult, tmp, false);
-        free(tmp);
-        return 0;
     } else if (!strcmp(argv[1], "start")) {
         rc = gCtls->clatdCtrl.startClatd(argv[2]);
     } else {
@@ -1231,15 +1208,6 @@ int CommandListener::StrictCmd::runCommand(SocketClient *cli, int argc,
         return 0;
     }
 
-    if (!strcmp(argv[1], "enable")) {
-        int res = gCtls->strictCtrl.enableStrict();
-        return sendGenericOkFail(cli, res);
-    }
-    if (!strcmp(argv[1], "disable")) {
-        int res = gCtls->strictCtrl.disableStrict();
-        return sendGenericOkFail(cli, res);
-    }
-
     if (!strcmp(argv[1], "set_uid_cleartext_policy")) {
         if (argc != 4) {
             cli->sendMsg(ResponseCode::CommandSyntaxError,
@@ -1249,7 +1217,7 @@ int CommandListener::StrictCmd::runCommand(SocketClient *cli, int argc,
         }
 
         errno = 0;
-        unsigned long int uid = strtoul(argv[2], NULL, 0);
+        unsigned long int uid = strtoul(argv[2], nullptr, 0);
         if (errno || uid > UID_MAX) {
             cli->sendMsg(ResponseCode::CommandSyntaxError, "Invalid UID", false);
             return 0;
@@ -1310,7 +1278,7 @@ int CommandListener::NetworkCommand::runCommand(SocketClient* client, int argc, 
         if (!strcmp(argv[nextArg], "legacy")) {
             ++nextArg;
             legacy = true;
-            uid = strtoul(argv[nextArg++], NULL, 0);
+            uid = strtoul(argv[nextArg++], nullptr, 0);
         }
 
         bool add = false;
@@ -1328,7 +1296,7 @@ int CommandListener::NetworkCommand::runCommand(SocketClient* client, int argc, 
         unsigned netId = stringToNetId(argv[nextArg++]);
         const char* interface = argv[nextArg++];
         const char* destination = argv[nextArg++];
-        const char* nexthop = argc > nextArg ? argv[nextArg] : NULL;
+        const char* nexthop = argc > nextArg ? argv[nextArg] : nullptr;
 
         int ret;
         if (add) {
@@ -1526,7 +1494,7 @@ int CommandListener::NetworkCommand::runCommand(SocketClient* client, int argc, 
         }
         std::vector<uid_t> uids;
         for (int i = 3; i < argc; ++i) {
-            uids.push_back(strtoul(argv[i], NULL, 0));
+            uids.push_back(strtoul(argv[i], nullptr, 0));
         }
         if (!strcmp(argv[2], "allow")) {
             gCtls->netCtrl.allowProtect(uids);

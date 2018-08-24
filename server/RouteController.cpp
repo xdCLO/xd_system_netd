@@ -92,8 +92,8 @@ const uid_t UID_ROOT = 0;
 const uint32_t FWMARK_NONE = 0;
 const uint32_t MASK_NONE = 0;
 const char* const IIF_LOOPBACK = "lo";
-const char* const IIF_NONE = NULL;
-const char* const OIF_NONE = NULL;
+const char* const IIF_NONE = nullptr;
+const char* const OIF_NONE = nullptr;
 const bool ACTION_ADD = true;
 const bool ACTION_DEL = false;
 const bool MODIFY_NON_UID_BASED_RULES = true;
@@ -155,7 +155,7 @@ uint32_t RouteController::getRouteTableForInterfaceLocked(const char* interface)
 }
 
 uint32_t RouteController::getIfIndex(const char* interface) {
-    android::RWLock::AutoRLock lock(sInterfaceToTableLock);
+    std::lock_guard lock(sInterfaceToTableLock);
 
     auto iter = sInterfaceToTable.find(interface);
     if (iter == sInterfaceToTable.end()) {
@@ -167,7 +167,7 @@ uint32_t RouteController::getIfIndex(const char* interface) {
 }
 
 uint32_t RouteController::getRouteTableForInterface(const char* interface) {
-    android::RWLock::AutoRLock lock(sInterfaceToTableLock);
+    std::lock_guard lock(sInterfaceToTableLock);
     return getRouteTableForInterfaceLocked(interface);
 }
 
@@ -191,7 +191,7 @@ void RouteController::updateTableNamesFile() {
     addTableName(ROUTE_TABLE_LEGACY_NETWORK, ROUTE_TABLE_NAME_LEGACY_NETWORK, &contents);
     addTableName(ROUTE_TABLE_LEGACY_SYSTEM,  ROUTE_TABLE_NAME_LEGACY_SYSTEM,  &contents);
 
-    android::RWLock::AutoRLock lock(sInterfaceToTableLock);
+    std::lock_guard lock(sInterfaceToTableLock);
     for (const auto& entry : sInterfaceToTable) {
         addTableName(entry.second, entry.first, &contents);
     }
@@ -279,7 +279,7 @@ WARN_UNUSED_RESULT int modifyIpRule(uint16_t action, uint32_t priority, uint8_t 
     struct fib_rule_uid_range uidRange = { uidStart, uidEnd };
 
     iovec iov[] = {
-        { NULL,              0 },
+        { nullptr,              0 },
         { &rule,             sizeof(rule) },
         { &FRATTR_PRIORITY,  sizeof(FRATTR_PRIORITY) },
         { &priority,         sizeof(priority) },
@@ -365,11 +365,11 @@ WARN_UNUSED_RESULT int modifyIpRoute(uint16_t action, uint32_t table, const char
         // the table number. But it's an error to specify an interface ("dev ...") or a nexthop for
         // unreachable routes, so nuke them. (IPv6 allows them to be specified; IPv4 doesn't.)
         interface = OIF_NONE;
-        nexthop = NULL;
+        nexthop = nullptr;
     } else if (nexthop && !strcmp(nexthop, "throw")) {
         type = RTN_THROW;
         interface = OIF_NONE;
-        nexthop = NULL;
+        nexthop = nullptr;
     } else {
         // If an interface was specified, find the ifindex.
         if (interface != OIF_NONE) {
@@ -402,7 +402,7 @@ WARN_UNUSED_RESULT int modifyIpRoute(uint16_t action, uint32_t table, const char
     rtattr rtaGateway = { U16_RTA_LENGTH(rawLength), RTA_GATEWAY };
 
     iovec iov[] = {
-        { NULL,          0 },
+        { nullptr,          0 },
         { &route,        sizeof(route) },
         { &RTATTR_TABLE, sizeof(RTATTR_TABLE) },
         { &table,        sizeof(table) },
@@ -686,11 +686,11 @@ int RouteController::configureDummyNetwork() {
         return ret;
     }
 
-    if ((ret = modifyIpRoute(RTM_NEWROUTE, table, interface, "0.0.0.0/0", NULL))) {
+    if ((ret = modifyIpRoute(RTM_NEWROUTE, table, interface, "0.0.0.0/0", nullptr))) {
         return ret;
     }
 
-    if ((ret = modifyIpRoute(RTM_NEWROUTE, table, interface, "::/0", NULL))) {
+    if ((ret = modifyIpRoute(RTM_NEWROUTE, table, interface, "::/0", nullptr))) {
         return ret;
     }
 
@@ -927,7 +927,7 @@ WARN_UNUSED_RESULT int RouteController::flushRoutes(uint32_t table) {
 
 // Returns 0 on success or negative errno on failure.
 WARN_UNUSED_RESULT int RouteController::flushRoutes(const char* interface) {
-    android::RWLock::AutoWLock lock(sInterfaceToTableLock);
+    std::lock_guard lock(sInterfaceToTableLock);
 
     uint32_t table = getRouteTableForInterfaceLocked(interface);
     if (table == RT_TABLE_UNSPEC) {
@@ -1089,9 +1089,9 @@ int RouteController::removeVirtualNetworkFallthrough(unsigned vpnNetId,
 }
 
 // Protects sInterfaceToTable.
-android::RWLock RouteController::sInterfaceToTableLock;
-
+std::mutex RouteController::sInterfaceToTableLock;
 std::map<std::string, uint32_t> RouteController::sInterfaceToTable;
+
 
 }  // namespace net
 }  // namespace android

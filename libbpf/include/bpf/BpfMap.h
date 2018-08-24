@@ -58,7 +58,7 @@ class BpfMap {
     }
 
     netdutils::Status pinToPath(const std::string path) {
-        int ret = mapPin(mMapFd, path.c_str());
+        int ret = bpfFdPin(mMapFd, path.c_str());
         if (ret) {
             return netdutils::statusFromErrno(errno,
                                               base::StringPrintf("pin to %s failed", path.c_str()));
@@ -165,7 +165,7 @@ class BpfMap {
         const auto deleteAllEntries = [](const Key& key, BpfMap<Key, Value>& map) {
             netdutils::Status res = map.deleteValue(key);
             if (!isOk(res) && (res.code() != ENOENT)) {
-                ALOGE("Failed to delete data(uid=%u): %s\n", key, strerror(res.code()));
+                ALOGE("Failed to delete data %s\n", strerror(res.code()));
             }
             return netdutils::status::ok;
         };

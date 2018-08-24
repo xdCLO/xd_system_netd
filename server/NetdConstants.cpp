@@ -38,9 +38,6 @@
 
 const size_t SHA256_SIZE = EVP_MD_size(EVP_sha256());
 
-const char * const ADD = "add";
-const char * const DEL = "del";
-
 int execIptablesRestoreWithOutput(IptablesTarget target, const std::string& commands,
                                   std::string *output) {
     return android::net::gCtls->iptablesRestoreCtrl.execute(target, commands, output);
@@ -111,7 +108,7 @@ int parsePrefix(const char *prefix, uint8_t *family, void *address, int size, ui
     addrinfo hints = {
         .ai_flags = AI_NUMERICHOST,
     };
-    int ret = getaddrinfo(addressString.c_str(), NULL, &hints, &res);
+    int ret = getaddrinfo(addressString.c_str(), nullptr, &hints, &res);
     if (ret || !res) {
         return -EINVAL;  // getaddrinfo return values are not errno values.
     }
@@ -161,7 +158,7 @@ void blockSigpipe() {
 
     sigemptyset(&mask);
     sigaddset(&mask, SIGPIPE);
-    if (sigprocmask(SIG_BLOCK, &mask, NULL) != 0)
+    if (sigprocmask(SIG_BLOCK, &mask, nullptr) != 0)
         ALOGW("WARNING: SIGPIPE not blocked\n");
 }
 

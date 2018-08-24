@@ -194,6 +194,28 @@ class NetdNativeService : public BinderService<NetdNativeService>, public BnNetd
             int32_t oKey);
 
     binder::Status removeVirtualTunnelInterface(const std::string& deviceName);
+
+    // Idletimer-related commands
+    binder::Status idletimerAddInterface(const std::string& ifName, int32_t timeout,
+                                         const std::string& classLabel) override;
+    binder::Status idletimerRemoveInterface(const std::string& ifName, int32_t timeout,
+                                            const std::string& classLabel) override;
+
+    // Strict-related commands
+    binder::Status strictUidCleartextPenalty(int32_t uid, int32_t policyPenalty) override;
+
+    // Clatd-related commands
+    binder::Status clatdStart(const std::string& ifName) override;
+    binder::Status clatdStop(const std::string& ifName) override;
+
+    // Ipfw-related commands
+    binder::Status ipfwdEnabled(bool* status) override;
+    binder::Status ipfwdEnableForwarding(const std::string& requester) override;
+    binder::Status ipfwdDisableForwarding(const std::string& requester) override;
+    binder::Status ipfwdAddInterfaceForward(const std::string& fromIface,
+                                            const std::string& toIface) override;
+    binder::Status ipfwdRemoveInterfaceForward(const std::string& fromIface,
+                                               const std::string& toIface) override;
 };
 
 }  // namespace net

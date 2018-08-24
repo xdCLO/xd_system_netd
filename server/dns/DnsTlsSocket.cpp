@@ -33,7 +33,6 @@
 #include "log/log.h"
 #include "netdutils/SocketOption.h"
 #include "Fwmark.h"
-#undef ADD  // already defined in nameser.h
 #include "NetdConstants.h"
 #include "Permission.h"
 
@@ -108,7 +107,7 @@ Status DnsTlsSocket::tcpConnect() {
 }
 
 bool getSPKIDigest(const X509* cert, std::vector<uint8_t>* out) {
-    int spki_len = i2d_X509_PUBKEY(X509_get_X509_PUBKEY(cert), NULL);
+    int spki_len = i2d_X509_PUBKEY(X509_get_X509_PUBKEY(cert), nullptr);
     unsigned char spki[spki_len];
     unsigned char* temp = spki;
     if (spki_len != i2d_X509_PUBKEY(X509_get_X509_PUBKEY(cert), &temp)) {
@@ -117,7 +116,7 @@ bool getSPKIDigest(const X509* cert, std::vector<uint8_t>* out) {
     }
     out->resize(SHA256_SIZE);
     unsigned int digest_len = 0;
-    int ret = EVP_Digest(spki, spki_len, out->data(), &digest_len, EVP_sha256(), NULL);
+    int ret = EVP_Digest(spki, spki_len, out->data(), &digest_len, EVP_sha256(), nullptr);
     if (ret != 1) {
         ALOGW("Server cert digest extraction failed");
         return false;
@@ -132,7 +131,7 @@ bool getSPKIDigest(const X509* cert, std::vector<uint8_t>* out) {
 bool DnsTlsSocket::initialize() {
     // This method should only be called once, at the beginning, so locking should be
     // unnecessary.  This lock only serves to help catch bugs in code that calls this method.
-    std::lock_guard<std::mutex> guard(mLock);
+    std::lock_guard guard(mLock);
     if (mSslCtx) {
         // This is a bug in the caller.
         return false;
@@ -340,7 +339,7 @@ bool DnsTlsSocket::sslWrite(const Slice buffer) {
 }
 
 void DnsTlsSocket::loop() {
-    std::lock_guard<std::mutex> guard(mLock);
+    std::lock_guard guard(mLock);
     // Buffer at most one query.
     Query q;
 
@@ -413,7 +412,7 @@ DnsTlsSocket::~DnsTlsSocket() {
     mIpcInFd.reset();
     {
         // Wait for the orderly shutdown to complete.
-        std::lock_guard<std::mutex> guard(mLock);
+        std::lock_guard guard(mLock);
         if (mLoopThread && std::this_thread::get_id() == mLoopThread->get_id()) {
             ALOGE("Violation of re-entrance precondition");
             return;

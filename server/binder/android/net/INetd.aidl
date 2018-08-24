@@ -182,7 +182,8 @@ interface INetd {
     const int RESOLVER_PARAMS_SUCCESS_THRESHOLD = 1;
     const int RESOLVER_PARAMS_MIN_SAMPLES = 2;
     const int RESOLVER_PARAMS_MAX_SAMPLES = 3;
-    const int RESOLVER_PARAMS_COUNT = 4;
+    const int RESOLVER_PARAMS_BASE_TIMEOUT_MSEC = 4;
+    const int RESOLVER_PARAMS_COUNT = 5;
 
     /**
      * Sets the name servers, search domains and resolver params for the given network. Flushes the
@@ -563,4 +564,113 @@ interface INetd {
     * running on the device.
     */
     boolean trafficCheckBpfStatsEnable();
+
+   /**
+    * Add idletimer for specific interface
+    *
+    * @param ifName Name of target interface
+    * @param timeout The time in seconds that will trigger idletimer
+    * @param classLabel The unique identifier for this idletimer
+    * @throws ServiceSpecificException in case of failure, with an error code indicating the
+    *         cause of the the failure.
+    */
+    void idletimerAddInterface(
+            in @utf8InCpp String ifName,
+            int timeout,
+            in @utf8InCpp String classLabel);
+
+   /**
+    * Remove idletimer for specific interface
+    *
+    * @param ifName Name of target interface
+    * @param timeout The time in seconds that will trigger idletimer
+    * @param classLabel The unique identifier for this idletimer
+    * @throws ServiceSpecificException in case of failure, with an error code indicating the
+    *         cause of the the failure.
+    */
+    void idletimerRemoveInterface(
+            in @utf8InCpp String ifName,
+            int timeout,
+            in @utf8InCpp String classLabel);
+
+    const int PENALTY_POLICY_ACCEPT = 1;
+    const int PENALTY_POLICY_LOG = 2;
+    const int PENALTY_POLICY_REJECT = 3;
+
+   /**
+    * Offers to detect sockets sending data not wrapped inside a layer of SSL/TLS encryption.
+    *
+    * @param uid Uid of the app
+    * @param policyPenalty The penalty policy of the app
+    * @throws ServiceSpecificException in case of failure, with an error code indicating the
+    *         cause of the the failure.
+    */
+    void strictUidCleartextPenalty(int uid, int policyPenalty);
+
+   /**
+    * Start clatd
+    *
+    * @param ifName interface name to start clatd
+    * @throws ServiceSpecificException in case of failure, with an error code indicating the
+    *         cause of the the failure.
+    */
+    void clatdStart(in @utf8InCpp String ifName);
+
+   /**
+    * Stop clatd
+    *
+    * @param ifName interface name to stop clatd
+    * @throws ServiceSpecificException in case of failure, with an error code indicating the
+    *         cause of the the failure.
+    */
+    void clatdStop(in @utf8InCpp String ifName);
+
+   /**
+    * Get status of IP forwarding
+    *
+    * @return true if IP forwarding is enabled, false otherwise.
+    */
+    boolean ipfwdEnabled();
+
+   /**
+    * Enable IP forwarding for specific requester
+    *
+    * @param requester requester name to enable IP forwarding. It is a unique name which will be
+    *                  stored in Netd to make sure if any requester needs IP forwarding.
+    * @throws ServiceSpecificException in case of failure, with an error code indicating the
+    *         cause of the the failure.
+    */
+    void ipfwdEnableForwarding(in @utf8InCpp String requester);
+
+   /**
+    * Disable IP forwarding for specific requester
+    *
+    * @param requester requester name to disable IP forwarding. This name should match the
+    *                  names which are set by ipfwdEnableForwarding.
+    *                  IP forwarding would be disabled if it is the last requester.
+    * @throws ServiceSpecificException in case of failure, with an error code indicating the
+    *         cause of the the failure.
+    */
+    void ipfwdDisableForwarding(in @utf8InCpp String requester);
+
+   /**
+    * Add forwarding ip rule
+    *
+    * @param fromIface interface name to add forwarding ip rule
+    * @param toIface interface name to add forwarding ip rule
+    * @throws ServiceSpecificException in case of failure, with an error code indicating the
+    *         cause of the the failure.
+    */
+    void ipfwdAddInterfaceForward(in @utf8InCpp String fromIface, in @utf8InCpp String toIface);
+
+   /**
+    * Remove forwarding ip rule
+    *
+    * @param fromIface interface name to remove forwarding ip rule
+    * @param toIface interface name to remove forwarding ip rule
+    * @throws ServiceSpecificException in case of failure, with an error code indicating the
+    *         cause of the the failure.
+    */
+    void ipfwdRemoveInterfaceForward(in @utf8InCpp String fromIface, in @utf8InCpp String toIface);
+
 }

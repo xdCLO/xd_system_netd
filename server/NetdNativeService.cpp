@@ -70,7 +70,7 @@ binder::Status checkPermission(const char *permission) {
 
 #define ENFORCE_DEBUGGABLE() {                              \
     char value[PROPERTY_VALUE_MAX + 1];                     \
-    if (property_get("ro.debuggable", value, NULL) != 1     \
+    if (property_get("ro.debuggable", value, nullptr) != 1  \
             || value[0] != '1') {                           \
         return binder::Status::fromExceptionCode(           \
             binder::Status::EX_SECURITY,                    \
@@ -88,7 +88,7 @@ binder::Status checkPermission(const char *permission) {
 
 #define NETD_LOCKING_RPC(permission, lock)                  \
     ENFORCE_PERMISSION(permission);                         \
-    android::RWLock::AutoWLock _lock(lock);
+    std::lock_guard _lock(lock);
 
 #define NETD_BIG_LOCK_RPC(permission) NETD_LOCKING_RPC((permission), gBigNetdLock)
 
@@ -376,7 +376,7 @@ binder::Status NetdNativeService::getResolverInfo(int32_t netId,
 }
 
 binder::Status NetdNativeService::tetherApplyDnsInterfaces(bool *ret) {
-    NETD_LOCKING_RPC(NETWORK_STACK, gCtls->tetherCtrl.lock)
+    NETD_LOCKING_RPC(NETWORK_STACK, gCtls->tetherCtrl.lock);
 
     *ret = gCtls->tetherCtrl.applyDnsInterfaces();
     return binder::Status::ok();
@@ -404,7 +404,7 @@ void tetherAddStats(PersistableBundle *bundle, const TetherController::TetherSta
 }  // namespace
 
 binder::Status NetdNativeService::tetherGetStats(PersistableBundle *bundle) {
-    NETD_LOCKING_RPC(NETWORK_STACK, gCtls->tetherCtrl.lock)
+    NETD_LOCKING_RPC(NETWORK_STACK, gCtls->tetherCtrl.lock);
 
     const auto& statsList = gCtls->tetherCtrl.getTetherStats();
     if (!isOk(statsList)) {
@@ -745,6 +745,115 @@ binder::Status NetdNativeService::trafficCheckBpfStatsEnable(bool* ret) {
     ENFORCE_PERMISSION(NETWORK_STACK);
     *ret = gCtls->trafficCtrl.checkBpfStatsEnable();
     return binder::Status::ok();
+}
+
+binder::Status NetdNativeService::idletimerAddInterface(const std::string& ifName, int32_t timeout,
+                                                        const std::string& classLabel) {
+    NETD_LOCKING_RPC(NETWORK_STACK, gCtls->idletimerCtrl.lock);
+    auto entry = gLog.newEntry()
+                         .prettyFunction(__PRETTY_FUNCTION__)
+                         .arg(ifName)
+                         .arg(timeout)
+                         .arg(classLabel);
+    int res =
+            gCtls->idletimerCtrl.addInterfaceIdletimer(ifName.c_str(), timeout, classLabel.c_str());
+    gLog.log(entry.returns(res).withAutomaticDuration());
+    return statusFromErrcode(res);
+}
+
+binder::Status NetdNativeService::idletimerRemoveInterface(const std::string& ifName,
+                                                           int32_t timeout,
+                                                           const std::string& classLabel) {
+    NETD_LOCKING_RPC(NETWORK_STACK, gCtls->idletimerCtrl.lock);
+    auto entry = gLog.newEntry()
+                         .prettyFunction(__PRETTY_FUNCTION__)
+                         .arg(ifName)
+                         .arg(timeout)
+                         .arg(classLabel);
+    int res = gCtls->idletimerCtrl.removeInterfaceIdletimer(ifName.c_str(), timeout,
+                                                            classLabel.c_str());
+    gLog.log(entry.returns(res).withAutomaticDuration());
+    return statusFromErrcode(res);
+}
+
+binder::Status NetdNativeService::strictUidCleartextPenalty(int32_t uid, int32_t policyPenalty) {
+    NETD_LOCKING_RPC(NETWORK_STACK, gCtls->strictCtrl.lock);
+    auto entry = gLog.newEntry().prettyFunction(__PRETTY_FUNCTION__).arg(uid).arg(policyPenalty);
+    StrictPenalty penalty;
+    switch (policyPenalty) {
+        case INetd::PENALTY_POLICY_REJECT:
+            penalty = REJECT;
+            break;
+        case INetd::PENALTY_POLICY_LOG:
+            penalty = LOG;
+            break;
+        case INetd::PENALTY_POLICY_ACCEPT:
+            penalty = ACCEPT;
+            break;
+        default:
+            return statusFromErrcode(-EINVAL);
+            break;
+    }
+    int res = gCtls->strictCtrl.setUidCleartextPenalty((uid_t) uid, penalty);
+    gLog.log(entry.returns(res).withAutomaticDuration());
+    return statusFromErrcode(res);
+}
+binder::Status NetdNativeService::clatdStart(const std::string& ifName) {
+    NETD_LOCKING_RPC(NETWORK_STACK, gCtls->clatdCtrl.mutex);
+    auto entry = gLog.newEntry().prettyFunction(__PRETTY_FUNCTION__).arg(ifName);
+    int res = gCtls->clatdCtrl.startClatd(ifName.c_str());
+    gLog.log(entry.returns(res).withAutomaticDuration());
+    return statusFromErrcode(res);
+}
+
+binder::Status NetdNativeService::clatdStop(const std::string& ifName) {
+    NETD_LOCKING_RPC(NETWORK_STACK, gCtls->clatdCtrl.mutex);
+    auto entry = gLog.newEntry().prettyFunction(__PRETTY_FUNCTION__).arg(ifName);
+    int res = gCtls->clatdCtrl.stopClatd(ifName.c_str());
+    gLog.log(entry.returns(res).withAutomaticDuration());
+    return statusFromErrcode(res);
+}
+
+binder::Status NetdNativeService::ipfwdEnabled(bool* status) {
+    NETD_LOCKING_RPC(NETWORK_STACK, gCtls->tetherCtrl.lock);
+    auto entry = gLog.newEntry().prettyFunction(__PRETTY_FUNCTION__);
+    *status = (gCtls->tetherCtrl.forwardingRequestCount() > 0) ? true : false;
+    gLog.log(entry.returns(*status).withAutomaticDuration());
+    return binder::Status::ok();
+}
+
+binder::Status NetdNativeService::ipfwdEnableForwarding(const std::string& requester) {
+    NETD_LOCKING_RPC(NETWORK_STACK, gCtls->tetherCtrl.lock);
+    auto entry = gLog.newEntry().prettyFunction(__PRETTY_FUNCTION__).arg(requester);
+    int res = (gCtls->tetherCtrl.enableForwarding(requester.c_str())) ? 0 : -EREMOTEIO;
+    gLog.log(entry.returns(res).withAutomaticDuration());
+    return statusFromErrcode(res);
+}
+
+binder::Status NetdNativeService::ipfwdDisableForwarding(const std::string& requester) {
+    NETD_LOCKING_RPC(NETWORK_STACK, gCtls->tetherCtrl.lock);
+    auto entry = gLog.newEntry().prettyFunction(__PRETTY_FUNCTION__).arg(requester);
+    int res = (gCtls->tetherCtrl.disableForwarding(requester.c_str())) ? 0 : -EREMOTEIO;
+    gLog.log(entry.returns(res).withAutomaticDuration());
+    return statusFromErrcode(res);
+}
+
+binder::Status NetdNativeService::ipfwdAddInterfaceForward(const std::string& fromIface,
+                                                           const std::string& toIface) {
+    ENFORCE_PERMISSION(NETWORK_STACK);
+    auto entry = gLog.newEntry().prettyFunction(__PRETTY_FUNCTION__).arg(fromIface).arg(toIface);
+    int res = RouteController::enableTethering(fromIface.c_str(), toIface.c_str());
+    gLog.log(entry.returns(res).withAutomaticDuration());
+    return statusFromErrcode(res);
+}
+
+binder::Status NetdNativeService::ipfwdRemoveInterfaceForward(const std::string& fromIface,
+                                                              const std::string& toIface) {
+    ENFORCE_PERMISSION(NETWORK_STACK);
+    auto entry = gLog.newEntry().prettyFunction(__PRETTY_FUNCTION__).arg(fromIface).arg(toIface);
+    int res = RouteController::disableTethering(fromIface.c_str(), toIface.c_str());
+    gLog.log(entry.returns(res).withAutomaticDuration());
+    return statusFromErrcode(res);
 }
 
 }  // namespace net
