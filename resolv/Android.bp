@@ -1,0 +1,27 @@
+cc_library_shared {
+    name: "libnetd_resolv",
+    defaults: ["netd_defaults"],
+    srcs: [
+        "getaddrinfo.cpp",
+        "gethnamaddr.cpp",
+        "sethostent.cpp",
+        "res_cache.cpp",
+        "res_comp.cpp",
+        "res_data.cpp",
+        "res_debug.cpp",
+        "res_init.cpp",
+        "res_mkquery.cpp",
+        "res_query.cpp",
+        "res_send.cpp",
+        "res_state.cpp",
+        "res_stats.cpp",
+    ],
+    // TODO: stop depending on internal bionic headers
+    include_dirs: [
+        "bionic/libc/async_safe/include",  // For async_safe/log.h
+        "bionic/libc/dns/include",  // For nsswitch.h
+    ],
+    export_include_dirs: ["."],  // Export resolv_netid.h
+    // TODO: pie in the sky: make this code clang-tidy clean
+    tidy: false
+}

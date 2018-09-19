@@ -43,6 +43,15 @@ class NetdNativeService : public BinderService<NetdNativeService>, public BnNetd
 
     // Bandwidth control commands.
     binder::Status bandwidthEnableDataSaver(bool enable, bool *ret) override;
+    binder::Status bandwidthSetInterfaceQuota(const std::string& ifName, int64_t bytes) override;
+    binder::Status bandwidthRemoveInterfaceQuota(const std::string& ifName) override;
+    binder::Status bandwidthSetInterfaceAlert(const std::string& ifName, int64_t bytes) override;
+    binder::Status bandwidthRemoveInterfaceAlert(const std::string& ifName) override;
+    binder::Status bandwidthSetGlobalAlert(int64_t bytes) override;
+    binder::Status bandwidthAddNaughtyApp(int32_t uid) override;
+    binder::Status bandwidthRemoveNaughtyApp(int32_t uid) override;
+    binder::Status bandwidthAddNiceApp(int32_t uid) override;
+    binder::Status bandwidthRemoveNiceApp(int32_t uid) override;
 
     // Network and routing commands.
     binder::Status networkCreatePhysical(int32_t netId, const std::string& permission)
@@ -93,9 +102,10 @@ class NetdNativeService : public BinderService<NetdNativeService>, public BnNetd
     binder::Status interfaceDelAddress(const std::string &ifName,
             const std::string &addrString, int prefixLength) override;
 
-    binder::Status setProcSysNet(
-            int32_t family, int32_t which, const std::string &ifname, const std::string &parameter,
-            const std::string &value) override;
+    binder::Status getProcSysNet(int32_t ipversion, int32_t which, const std::string& ifname,
+                                 const std::string& parameter, std::string* value) override;
+    binder::Status setProcSysNet(int32_t ipversion, int32_t which, const std::string& ifname,
+                                 const std::string& parameter, const std::string& value) override;
 
     // Metrics reporting level set / get (internal use only).
     binder::Status getMetricsReportingLevel(int *reportingLevel) override;
@@ -151,31 +161,19 @@ class NetdNativeService : public BinderService<NetdNativeService>, public BnNetd
     binder::Status ipSecRemoveTransportModeTransform(
             const android::base::unique_fd& socket);
 
-    binder::Status ipSecAddSecurityPolicy(
-            int32_t transformId,
-            int32_t direction,
-            const std::string& sourceAddress,
-            const std::string& destinationAddress,
-            int32_t spi,
-            int32_t markValue,
-            int32_t markMask);
+    binder::Status ipSecAddSecurityPolicy(int32_t transformId, int32_t selAddrFamily,
+                                          int32_t direction, const std::string& tmplSrcAddress,
+                                          const std::string& tmplDstAddress, int32_t spi,
+                                          int32_t markValue, int32_t markMask);
 
-    binder::Status ipSecUpdateSecurityPolicy(
-            int32_t transformId,
-            int32_t direction,
-            const std::string& sourceAddress,
-            const std::string& destinationAddress,
-            int32_t spi,
-            int32_t markValue,
-            int32_t markMask);
+    binder::Status ipSecUpdateSecurityPolicy(int32_t transformId, int32_t selAddrFamily,
+                                             int32_t direction, const std::string& tmplSrcAddress,
+                                             const std::string& tmplDstAddress, int32_t spi,
+                                             int32_t markValue, int32_t markMask);
 
-    binder::Status ipSecDeleteSecurityPolicy(
-            int32_t transformId,
-            int32_t direction,
-            const std::string& sourceAddress,
-            const std::string& destinationAddress,
-            int32_t markValue,
-            int32_t markMask);
+    binder::Status ipSecDeleteSecurityPolicy(int32_t transformId, int32_t selAddrFamily,
+                                             int32_t direction, int32_t markValue,
+                                             int32_t markMask);
 
     binder::Status trafficCheckBpfStatsEnable(bool* ret) override;
 

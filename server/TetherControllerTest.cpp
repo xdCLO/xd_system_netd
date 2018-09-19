@@ -127,19 +127,22 @@ protected:
             "COMMIT\n", intIf);
 
         std::vector<std::string> v4Cmds = {
-            "*raw",
-            StringPrintf("-A tetherctrl_raw_PREROUTING -p tcp --dport 21 -i %s -j CT --helper ftp",
-                         intIf),
-            StringPrintf("-A tetherctrl_raw_PREROUTING -p tcp --dport 1723 -i %s -j CT --helper pptp",
-                         intIf),
-            "COMMIT",
-            "*filter",
-            StringPrintf("-A tetherctrl_FORWARD -i %s -o %s -m state --state"
-                         " ESTABLISHED,RELATED -g tetherctrl_counters", extIf, intIf),
-            StringPrintf("-A tetherctrl_FORWARD -i %s -o %s -m state --state INVALID -j DROP",
-                         intIf, extIf),
-            StringPrintf("-A tetherctrl_FORWARD -i %s -o %s -g tetherctrl_counters",
-                         intIf, extIf),
+                "*raw",
+                StringPrintf(
+                        "-A tetherctrl_raw_PREROUTING -p tcp --dport 21 -i %s -j CT --helper ftp",
+                        intIf),
+                StringPrintf("-A tetherctrl_raw_PREROUTING -p tcp --dport 1723 -i %s -j CT "
+                             "--helper pptp",
+                             intIf),
+                "COMMIT",
+                "*filter",
+                StringPrintf("-A tetherctrl_FORWARD -i %s -o %s -m state --state"
+                             " ESTABLISHED,RELATED -g tetherctrl_counters",
+                             extIf, intIf),
+                StringPrintf("-A tetherctrl_FORWARD -i %s -o %s -m state --state INVALID -j DROP",
+                             intIf, extIf),
+                StringPrintf("-A tetherctrl_FORWARD -i %s -o %s -g tetherctrl_counters", intIf,
+                             extIf),
         };
 
         std::vector<std::string> v6Cmds = {
@@ -201,6 +204,7 @@ protected:
             "COMMIT\n", intIf);
 
         std::vector<std::string> v4Cmds = {
+<<<<<<< HEAD
             "*raw",
             StringPrintf("-D tetherctrl_raw_PREROUTING -p tcp --dport 21 -i %s -j CT --helper ftp",
                          intIf),
@@ -215,6 +219,25 @@ protected:
             StringPrintf("-D tetherctrl_FORWARD -i %s -o %s -g tetherctrl_counters",
                          intIf, extIf),
             "COMMIT\n",
+=======
+                "*raw",
+                StringPrintf(
+                        "-D tetherctrl_raw_PREROUTING -p tcp --dport 21 -i %s -j CT --helper ftp",
+                        intIf),
+                StringPrintf("-D tetherctrl_raw_PREROUTING -p tcp --dport 1723 -i %s -j CT "
+                             "--helper pptp",
+                             intIf),
+                "COMMIT",
+                "*filter",
+                StringPrintf("-D tetherctrl_FORWARD -i %s -o %s -m state --state"
+                             " ESTABLISHED,RELATED -g tetherctrl_counters",
+                             extIf, intIf),
+                StringPrintf("-D tetherctrl_FORWARD -i %s -o %s -m state --state INVALID -j DROP",
+                             intIf, extIf),
+                StringPrintf("-D tetherctrl_FORWARD -i %s -o %s -g tetherctrl_counters", intIf,
+                             extIf),
+                "COMMIT\n",
+>>>>>>> 62cf33b89f0bd763ed9abf1faeb34aef0a685681
         };
 
         return {
