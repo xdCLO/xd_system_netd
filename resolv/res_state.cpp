@@ -25,6 +25,9 @@
  * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+
+#define LOG_TAG "res_state"
+
 #include <arpa/inet.h>
 #include <arpa/nameser.h>
 #include <netdb.h>
@@ -32,21 +35,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <unistd.h> /* for gettid() */
+
+#include <android-base/logging.h>
+
 #include "resolv_cache.h"
 #include "resolv_private.h"
-
-/* Set to 1 to enable debug traces */
-#define DEBUG 0
-
-#if DEBUG
-#include <async_safe/log.h>
-#include <unistd.h> /* for gettid() */
-#define D(...) async_safe_format_log(ANDROID_LOG_DEBUG, "libc", __VA_ARGS__)
-#else
-#define D(...) \
-    do {       \
-    } while (0)
-#endif
 
 typedef struct {
     int _h_errno;
@@ -55,7 +49,7 @@ typedef struct {
     struct res_static _rstatic[1];
 } _res_thread;
 
-static _res_thread* _res_thread_alloc(void) {
+static _res_thread* res_thread_alloc(void) {
     _res_thread* rt = (_res_thread*) calloc(1, sizeof(*rt));
 
     if (rt) {
@@ -65,7 +59,7 @@ static _res_thread* _res_thread_alloc(void) {
     return rt;
 }
 
-static void _res_static_done(struct res_static* rs) {
+static void res_static_done(struct res_static* rs) {
     /* fortunately, there is nothing to do here, since the
      * points in h_addr_ptrs and host_aliases should all
      * point to 'hostbuf'
@@ -77,12 +71,12 @@ static void _res_static_done(struct res_static* rs) {
     free(rs->servent.s_aliases);
 }
 
-static void _res_thread_free(void* _rt) {
+static void res_thread_free(void* _rt) {
     _res_thread* rt = (_res_thread*) _rt;
 
-    D("%s: rt=%p for thread=%d", __FUNCTION__, rt, gettid());
+    LOG(VERBOSE) << __func__ << ": rt=" << rt << " for thread=" << gettid();
 
-    _res_static_done(rt->_rstatic);
+    res_static_done(rt->_rstatic);
     res_ndestroy(rt->_nres);
     free(rt);
 }
@@ -90,10 +84,10 @@ static void _res_thread_free(void* _rt) {
 static pthread_key_t _res_key;
 
 __attribute__((constructor)) static void __res_key_init() {
-    pthread_key_create(&_res_key, _res_thread_free);
+    pthread_key_create(&_res_key, res_thread_free);
 }
 
-static _res_thread* _res_thread_get(void) {
+static _res_thread* res_thread_get(void) {
     _res_thread* rt = (_res_thread*) pthread_getspecific(_res_key);
     if (rt != NULL) {
         return rt;
@@ -101,66 +95,49 @@ static _res_thread* _res_thread_get(void) {
 
     /* It is the first time this function is called in this thread,
      * we need to create a new thread-specific DNS resolver state. */
-    rt = _res_thread_alloc();
+    rt = res_thread_alloc();
     if (rt == NULL) {
         return NULL;
     }
     pthread_setspecific(_res_key, rt);
-    D("%s: tid=%d Created new DNS state rt=%p", __FUNCTION__, gettid(), rt);
 
     /* Reset the state, note that res_ninit() can now properly reset
      * an existing state without leaking memory.
      */
-    D("%s: tid=%d, rt=%p, setting DNS state (options RES_INIT=%d)", __FUNCTION__, gettid(), rt,
-      (rt->_nres->options & RES_INIT) != 0);
+    LOG(VERBOSE) << __func__ << ": tid=" << gettid() << ", rt=" << rt
+                 << " setting DNS state (options=" << rt->_nres->options << ")";
     if (res_ninit(rt->_nres) < 0) {
         /* This should not happen */
-        D("%s: tid=%d rt=%p, woot, res_ninit() returned < 0", __FUNCTION__, gettid(), rt);
-        _res_thread_free(rt);
+        LOG(VERBOSE) << __func__ << ": tid=" << gettid() << " rt=" << rt
+                     << ", res_ninit() returned < 0";
+        res_thread_free(rt);
         pthread_setspecific(_res_key, NULL);
         return NULL;
     }
     return rt;
 }
 
-__LIBC_HIDDEN__
 struct __res_state _nres;
 
-#if 0
-struct resolv_cache*
-__get_res_cache(void)
-{
-    _res_thread*  rt = _res_thread_get();
-
-    if (!rt)
-        return NULL;
-
-    if (!rt->_cache) {
-        rt->_cache = _resolv_cache_create();
-    }
-    return rt->_cache;
-}
-#endif
-
 int* __get_h_errno(void) {
-    _res_thread* rt = _res_thread_get();
+    _res_thread* rt = res_thread_get();
     static int panic = NETDB_INTERNAL;
 
     return rt ? &rt->_h_errno : &panic;
 }
 
-res_state __res_get_state(void) {
-    _res_thread* rt = _res_thread_get();
+res_state res_get_state(void) {
+    _res_thread* rt = res_thread_get();
 
     return rt ? rt->_nres : NULL;
 }
 
-void __res_put_state(res_state res __unused) {
+void res_put_state(res_state res __unused) {
     /* nothing to do */
 }
 
-struct res_static* __res_get_static(void) {
-    _res_thread* rt = _res_thread_get();
+res_static* res_get_static(void) {
+    _res_thread* rt = res_thread_get();
 
     return rt ? rt->_rstatic : NULL;
 }

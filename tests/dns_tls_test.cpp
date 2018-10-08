@@ -15,6 +15,7 @@
  */
 
 #define LOG_TAG "dns_tls_test"
+#define LOG_NDEBUG 1  // Set to 0 to enable verbose debug logging
 
 #include <gtest/gtest.h>
 
@@ -153,15 +154,43 @@ TEST_F(TransportTest, Query) {
     EXPECT_EQ(QUERY, r.response);
 }
 
-TEST_F(TransportTest, SerialQueries_100000) {
-    FakeSocketFactory<FakeSocketEcho> factory;
-    DnsTlsTransport transport(SERVER1, MARK, &factory);
-    // Send more than 65536 queries serially.
-    for (int i = 0; i < 100000; ++i) {
-        auto r = transport.query(makeSlice(QUERY)).get();
+// Fake Socket that echoes the observed query ID as the response body.
+class FakeSocketId : public IDnsTlsSocket {
+  public:
+    explicit FakeSocketId(IDnsTlsSocketObserver* observer) : mObserver(observer) {}
+    bool query(uint16_t id, const Slice query ATTRIBUTE_UNUSED) override {
+        // Return the response immediately (asynchronously).
+        bytevec response(4);
+        // Echo the ID in the header to match the response to the query.
+        // This will be overwritten by DnsTlsQueryMap.
+        response[0] = id >> 8;
+        response[1] = id;
+        // Echo the ID in the body, so that the test can verify which ID was used by
+        // DnsTlsQueryMap.
+        response[2] = id >> 8;
+        response[3] = id;
+        std::thread(&IDnsTlsSocketObserver::onResponse, mObserver, response).detach();
+        return true;
+    }
 
+  private:
+    IDnsTlsSocketObserver* const mObserver;
+};
+
+// Test that IDs are properly reused
+TEST_F(TransportTest, IdReuse) {
+    FakeSocketFactory<FakeSocketId> factory;
+    DnsTlsTransport transport(SERVER1, MARK, &factory);
+    for (int i = 0; i < 100; ++i) {
+        // Send a query.
+        std::future<DnsTlsServer::Result> f = transport.query(makeSlice(QUERY));
+        // Wait for the response.
+        DnsTlsServer::Result r = f.get();
         EXPECT_EQ(DnsTlsTransport::Response::success, r.code);
-        EXPECT_EQ(QUERY, r.response);
+
+        // All queries should have an observed ID of zero, because it is returned to the ID pool
+        // after each use.
+        EXPECT_EQ(0, (r.response[2] << 8) | r.response[3]);
     }
 }
 
@@ -193,7 +222,7 @@ class FakeSocketDelay : public IDnsTlsSocket {
     static bool sReverse;
 
     bool query(uint16_t id, const Slice query) override {
-        ALOGD("FakeSocketDelay got query with ID %d", int(id));
+        ALOGV("FakeSocketDelay got query with ID %d", int(id));
         std::lock_guard guard(mLock);
         // Check for duplicate IDs.
         EXPECT_EQ(0U, mIds.count(id));
@@ -202,7 +231,7 @@ class FakeSocketDelay : public IDnsTlsSocket {
         // Store response.
         mResponses.push_back(make_echo(id, query));
 
-        ALOGD("Up to %zu out of %zu queries", mResponses.size(), sDelay);
+        ALOGV("Up to %zu out of %zu queries", mResponses.size(), sDelay);
         if (mResponses.size() == sDelay) {
             std::thread(&FakeSocketDelay::sendResponses, this).detach();
         }
@@ -432,31 +461,31 @@ class FakeSocketLimited : public IDnsTlsSocket {
         : mObserver(observer), mQueries(0) {}
     ~FakeSocketLimited() {
         {
-            ALOGD("~FakeSocketLimited acquiring mLock");
+            ALOGV("~FakeSocketLimited acquiring mLock");
             std::lock_guard guard(mLock);
-            ALOGD("~FakeSocketLimited acquired mLock");
+            ALOGV("~FakeSocketLimited acquired mLock");
             for (auto& thread : mThreads) {
-                ALOGD("~FakeSocketLimited joining response thread");
+                ALOGV("~FakeSocketLimited joining response thread");
                 thread.join();
-                ALOGD("~FakeSocketLimited joined response thread");
+                ALOGV("~FakeSocketLimited joined response thread");
             }
             mThreads.clear();
         }
 
         if (mCloser) {
-            ALOGD("~FakeSocketLimited joining closer thread");
+            ALOGV("~FakeSocketLimited joining closer thread");
             mCloser->join();
-            ALOGD("~FakeSocketLimited joined closer thread");
+            ALOGV("~FakeSocketLimited joined closer thread");
         }
     }
     bool query(uint16_t id, const Slice query) override {
-        ALOGD("FakeSocketLimited::query acquiring mLock");
+        ALOGV("FakeSocketLimited::query acquiring mLock");
         std::lock_guard guard(mLock);
-        ALOGD("FakeSocketLimited::query acquired mLock");
+        ALOGV("FakeSocketLimited::query acquired mLock");
         ++mQueries;
 
         if (mQueries <= sLimit) {
-            ALOGD("size %zu vs. limit of %zu", query.size(), sMaxSize);
+            ALOGV("size %zu vs. limit of %zu", query.size(), sMaxSize);
             if (query.size() <= sMaxSize) {
                 // Return the response immediately (asynchronously).
                 mThreads.emplace_back(&IDnsTlsSocketObserver::onResponse, mObserver, make_echo(id, query));
@@ -471,13 +500,13 @@ class FakeSocketLimited : public IDnsTlsSocket {
   private:
     void sendClose() {
         {
-            ALOGD("FakeSocketLimited::sendClose acquiring mLock");
+            ALOGV("FakeSocketLimited::sendClose acquiring mLock");
             std::lock_guard guard(mLock);
-            ALOGD("FakeSocketLimited::sendClose acquired mLock");
+            ALOGV("FakeSocketLimited::sendClose acquired mLock");
             for (auto& thread : mThreads) {
-                ALOGD("FakeSocketLimited::sendClose joining response thread");
+                ALOGV("FakeSocketLimited::sendClose joining response thread");
                 thread.join();
-                ALOGD("FakeSocketLimited::sendClose joined response thread");
+                ALOGV("FakeSocketLimited::sendClose joined response thread");
             }
             mThreads.clear();
         }

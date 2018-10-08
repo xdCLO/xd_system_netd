@@ -14,29 +14,36 @@
  * limitations under the License.
  */
 
+constexpr bool kVerboseLogging = false;
+#define LOG_TAG "res_stats"
+
 #include <arpa/nameser.h>
 #include <stdbool.h>
 #include <string.h>
 
-#include <async_safe/log.h>
+#include <android-base/logging.h>
 
 #include "resolv_stats.h"
 
-#define DBG 0
+#define VLOG if (!kVerboseLogging) {} else LOG(INFO)
 
-/* Calculate the round-trip-time from start time t0 and end time t1. */
-int _res_stats_calculate_rtt(const struct timespec* t1, const struct timespec* t0) {
+#ifndef RESOLV_ALLOW_VERBOSE_LOGGING
+static_assert(kVerboseLogging == false,
+              "Verbose logging floods logs at high-rate and exposes privacy-sensitive information. "
+              "Do not enable in release builds.");
+#endif
+
+// Calculate the round-trip-time from start time t0 and end time t1.
+int _res_stats_calculate_rtt(const timespec* t1, const timespec* t0) {
     // Divide ns by one million to get ms, multiply s by thousand to get ms (obvious)
     long ms0 = t0->tv_sec * 1000 + t0->tv_nsec / 1000000;
     long ms1 = t1->tv_sec * 1000 + t1->tv_nsec / 1000000;
     return (int) (ms1 - ms0);
 }
 
-/* Create a sample for calculating server reachability statistics. */
-void _res_stats_set_sample(struct __res_sample* sample, time_t now, int rcode, int rtt) {
-    if (DBG) {
-        async_safe_format_log(ANDROID_LOG_INFO, "libc", "rcode = %d, sec = %d", rcode, rtt);
-    }
+// Create a sample for calculating server reachability statistics.
+void _res_stats_set_sample(__res_sample* sample, time_t now, int rcode, int rtt) {
+    VLOG << __func__ << ": rcode = " << rcode << ", sec = " << rtt;
     sample->at = now;
     sample->rcode = rcode;
     sample->rtt = rtt;
@@ -109,7 +116,10 @@ void android_net_res_stats_aggregate(struct __res_stats* stats, int* successes, 
     *last_sample_time = last;
 }
 
-bool _res_stats_usable_server(const struct __res_params* params, struct __res_stats* stats) {
+// Returns true if the server is considered unusable, i.e. if the success rate is not lower than the
+// threshold for the stored stored samples. If not enough samples are stored, the server is
+// considered usable.
+static bool res_stats_usable_server(const struct __res_params* params, struct __res_stats* stats) {
     int successes = -1;
     int errors = -1;
     int timeouts = -1;
@@ -120,35 +130,26 @@ bool _res_stats_usable_server(const struct __res_params* params, struct __res_st
                                     &rtt_avg, &last_sample_time);
     if (successes >= 0 && errors >= 0 && timeouts >= 0) {
         int total = successes + errors + timeouts;
-        if (DBG) {
-            async_safe_format_log(ANDROID_LOG_DEBUG, "libc",
-                                  "NS stats: S %d + E %d + T %d + I %d "
-                                  "= %d, rtt = %d, min_samples = %d\n",
-                                  successes, errors, timeouts, internal_errors, total, rtt_avg,
-                                  params->min_samples);
-        }
+        VLOG << "NS stats: S " << successes
+             << " + E " << errors
+             << " + T " << timeouts
+             << " + I " << internal_errors
+             << " = " << total
+             << ", rtt = " << rtt_avg
+             << ", min_samples = " << params->min_samples;
         if (total >= params->min_samples && (errors > 0 || timeouts > 0)) {
             int success_rate = successes * 100 / total;
-            if (DBG) {
-                async_safe_format_log(ANDROID_LOG_DEBUG, "libc", "success rate %d%%\n",
-                                      success_rate);
-            }
+            VLOG << "success rate " << success_rate;
             if (success_rate < params->success_threshold) {
                 time_t now = time(NULL);
                 if (now - last_sample_time > params->sample_validity) {
                     // Note: It might be worth considering to expire old servers after their expiry
                     // date has been reached, however the code for returning the ring buffer to its
                     // previous non-circular state would induce additional complexity.
-                    if (DBG) {
-                        async_safe_format_log(ANDROID_LOG_INFO, "libc",
-                                              "samples stale, retrying server\n");
-                    }
+                    VLOG << "samples stale, retrying server";
                     _res_stats_clear_samples(stats);
                 } else {
-                    if (DBG) {
-                        async_safe_format_log(ANDROID_LOG_INFO, "libc",
-                                              "too many resolution errors, ignoring server\n");
-                    }
+                    VLOG << "too many resolution errors, ignoring server";
                     return 0;
                 }
             }
@@ -162,7 +163,7 @@ void android_net_res_stats_get_usable_servers(const struct __res_params* params,
                                               bool usable_servers[]) {
     unsigned usable_servers_found = 0;
     for (int ns = 0; ns < nscount; ns++) {
-        bool usable = _res_stats_usable_server(params, &stats[ns]);
+        bool usable = res_stats_usable_server(params, &stats[ns]);
         if (usable) {
             ++usable_servers_found;
         }
