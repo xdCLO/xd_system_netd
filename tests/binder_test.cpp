@@ -29,6 +29,7 @@
 #include <ifaddrs.h>
 #include <linux/if.h>
 #include <linux/if_tun.h>
+#include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <openssl/base64.h>
@@ -61,6 +62,7 @@
 #define RAW_TABLE "raw"
 #define MANGLE_TABLE "mangle"
 #define FILTER_TABLE "filter"
+#define NAT_TABLE "nat"
 
 namespace binder = android::binder;
 namespace netdutils = android::netdutils;
@@ -123,12 +125,15 @@ class BinderTest : public ::testing::Test {
     // Static because setting up the tun interface takes about 40ms.
     static void SetUpTestCase() {
         ASSERT_EQ(0, sTun.init());
+        ASSERT_EQ(0, sTun2.init());
         ASSERT_LE(sTun.name().size(), static_cast<size_t>(IFNAMSIZ));
+        ASSERT_LE(sTun2.name().size(), static_cast<size_t>(IFNAMSIZ));
     }
 
     static void TearDownTestCase() {
         // Closing the socket removes the interface and IP addresses.
         sTun.destroy();
+        sTun2.destroy();
     }
 
     static void fakeRemoteSocketPair(int *clientSocket, int *serverSocket, int *acceptedSocket);
@@ -136,9 +141,11 @@ class BinderTest : public ::testing::Test {
   protected:
     sp<INetd> mNetd;
     static TunInterface sTun;
+    static TunInterface sTun2;
 };
 
 TunInterface BinderTest::sTun;
+TunInterface BinderTest::sTun2;
 
 class TimedOperation : public Stopwatch {
   public:
@@ -272,7 +279,7 @@ TEST_F(BinderTest, FirewallReplaceUidChain) {
     EXPECT_EQ(false, ret);
 }
 
-TEST_F(BinderTest, VirtualTunnelInterface) {
+TEST_F(BinderTest, IpSecTunnelInterface) {
     const struct TestData {
         const std::string family;
         const std::string deviceName;
@@ -280,9 +287,11 @@ TEST_F(BinderTest, VirtualTunnelInterface) {
         const std::string remoteAddress;
         int32_t iKey;
         int32_t oKey;
+        int32_t ifId;
     } kTestData[] = {
-        {"IPV4", "test_vti", "127.0.0.1", "8.8.8.8", 0x1234 + 53, 0x1234 + 53},
-        {"IPV6", "test_vti6", "::1", "2001:4860:4860::8888", 0x1234 + 50, 0x1234 + 50},
+            {"IPV4", "ipsec_test", "127.0.0.1", "8.8.8.8", 0x1234 + 53, 0x1234 + 53, 0xFFFE},
+            {"IPV6", "ipsec_test6", "::1", "2001:4860:4860::8888", 0x1234 + 50, 0x1234 + 50,
+             0xFFFE},
     };
 
     for (unsigned int i = 0; i < std::size(kTestData); i++) {
@@ -290,19 +299,25 @@ TEST_F(BinderTest, VirtualTunnelInterface) {
 
         binder::Status status;
 
-        // Create Virtual Tunnel Interface.
-        status = mNetd->addVirtualTunnelInterface(td.deviceName, td.localAddress, td.remoteAddress,
-                                                  td.iKey, td.oKey);
+        // Create Tunnel Interface.
+        status = mNetd->ipSecAddTunnelInterface(td.deviceName, td.localAddress, td.remoteAddress,
+                                                td.iKey, td.oKey, td.ifId);
         EXPECT_TRUE(status.isOk()) << td.family << status.exceptionMessage();
 
-        // Update Virtual Tunnel Interface.
-        status = mNetd->updateVirtualTunnelInterface(td.deviceName, td.localAddress,
-                                                     td.remoteAddress, td.iKey, td.oKey);
+        // Check that the interface exists
+        EXPECT_NE(0, if_nametoindex(td.deviceName.c_str()));
+
+        // Update Tunnel Interface.
+        status = mNetd->ipSecUpdateTunnelInterface(td.deviceName, td.localAddress, td.remoteAddress,
+                                                   td.iKey, td.oKey, td.ifId);
         EXPECT_TRUE(status.isOk()) << td.family << status.exceptionMessage();
 
-        // Remove Virtual Tunnel Interface.
-        status = mNetd->removeVirtualTunnelInterface(td.deviceName);
+        // Remove Tunnel Interface.
+        status = mNetd->ipSecRemoveTunnelInterface(td.deviceName);
         EXPECT_TRUE(status.isOk()) << td.family << status.exceptionMessage();
+
+        // Check that the interface no longer exists
+        EXPECT_EQ(0, if_nametoindex(td.deviceName.c_str()));
     }
 }
 
@@ -321,16 +336,14 @@ bool BinderTest::allocateIpSecResources(bool expectOk, int32_t* spi) {
     RETURN_FALSE_IF_NEQ(status.ok(), expectOk);
 
     // Add a policy
-    status = XfrmController::ipSecAddSecurityPolicy(0, AF_INET6, 0, "::", "::1", 123, 0, 0);
+    status = XfrmController::ipSecAddSecurityPolicy(0, AF_INET6, 0, "::", "::1", 123, 0, 0, 0);
     SCOPED_TRACE(status);
     RETURN_FALSE_IF_NEQ(status.ok(), expectOk);
 
     // Add an ipsec interface
-    status = netdutils::statusFromErrno(
-            XfrmController::addVirtualTunnelInterface(
-                    "ipsec_test", "::", "::1", 0xF00D, 0xD00D, false),
-            "addVirtualTunnelInterface");
-    return (status.ok() == expectOk);
+    return expectOk == XfrmController::ipSecAddTunnelInterface("ipsec_test", "::", "::1", 0xF00D,
+                                                               0xD00D, 0xE00D, false)
+                               .ok();
 }
 
 TEST_F(BinderTest, XfrmDualSelectorTunnelModePoliciesV4) {
@@ -341,7 +354,7 @@ TEST_F(BinderTest, XfrmDualSelectorTunnelModePoliciesV4) {
         for (int direction : XFRM_DIRECTIONS) {
             for (int addrFamily : ADDRESS_FAMILIES) {
                 status = mNetd->ipSecAddSecurityPolicy(0, addrFamily, direction, "127.0.0.5",
-                                                       "127.0.0.6", 123, 0, 0);
+                                                       "127.0.0.6", 123, 0, 0, 0);
                 EXPECT_TRUE(status.isOk())
                         << " family: " << addrFamily << " direction: " << direction;
             }
@@ -350,7 +363,7 @@ TEST_F(BinderTest, XfrmDualSelectorTunnelModePoliciesV4) {
         // Cleanup
         for (int direction : XFRM_DIRECTIONS) {
             for (int addrFamily : ADDRESS_FAMILIES) {
-                status = mNetd->ipSecDeleteSecurityPolicy(0, addrFamily, direction, 0, 0);
+                status = mNetd->ipSecDeleteSecurityPolicy(0, addrFamily, direction, 0, 0, 0);
                 EXPECT_TRUE(status.isOk());
             }
         }
@@ -365,7 +378,7 @@ TEST_F(BinderTest, XfrmDualSelectorTunnelModePoliciesV6) {
         for (int direction : XFRM_DIRECTIONS) {
             for (int addrFamily : ADDRESS_FAMILIES) {
                 status = mNetd->ipSecAddSecurityPolicy(0, addrFamily, direction, "2001:db8::f00d",
-                                                       "2001:db8::d00d", 123, 0, 0);
+                                                       "2001:db8::d00d", 123, 0, 0, 0);
                 EXPECT_TRUE(status.isOk())
                         << " family: " << addrFamily << " direction: " << direction;
             }
@@ -374,7 +387,7 @@ TEST_F(BinderTest, XfrmDualSelectorTunnelModePoliciesV6) {
         // Cleanup
         for (int direction : XFRM_DIRECTIONS) {
             for (int addrFamily : ADDRESS_FAMILIES) {
-                status = mNetd->ipSecDeleteSecurityPolicy(0, addrFamily, direction, 0, 0);
+                status = mNetd->ipSecDeleteSecurityPolicy(0, addrFamily, direction, 0, 0, 0);
                 EXPECT_TRUE(status.isOk());
             }
         }
@@ -402,20 +415,16 @@ TEST_F(BinderTest, XfrmControllerInit) {
     ASSERT_TRUE(allocateIpSecResources(true, &spi));
 
     // Clean up
-    status = XfrmController::ipSecDeleteSecurityAssociation(0, "::", "::1", 123, spi, 0);
+    status = XfrmController::ipSecDeleteSecurityAssociation(0, "::", "::1", 123, spi, 0, 0);
     SCOPED_TRACE(status);
     ASSERT_TRUE(status.ok());
 
-    status = XfrmController::ipSecDeleteSecurityPolicy(0, AF_INET6, 0, 0, 0);
+    status = XfrmController::ipSecDeleteSecurityPolicy(0, AF_INET6, 0, 0, 0, 0);
     SCOPED_TRACE(status);
     ASSERT_TRUE(status.ok());
 
     // Remove Virtual Tunnel Interface.
-    status = netdutils::statusFromErrno(
-            XfrmController::removeVirtualTunnelInterface("ipsec_test"),
-            "removeVirtualTunnelInterface");
-
-    ASSERT_TRUE(status.ok());
+    ASSERT_TRUE(XfrmController::ipSecRemoveTunnelInterface("ipsec_test").ok());
 }
 #endif
 
@@ -1116,6 +1125,7 @@ static std::vector<std::string> listIptablesRuleByTable(const char* binary, cons
     return runCommand(command);
 }
 
+// TODO: It is a duplicate function, need to remove it
 bool iptablesIdleTimerInterfaceRuleExists(const char* binary, const char* chainName,
                                           const std::string& expectedInterface,
                                           const std::string& expectedRule, const char* table) {
@@ -1367,8 +1377,10 @@ constexpr char BANDWIDTH_OUTPUT[] = "bw_OUTPUT";
 constexpr char BANDWIDTH_FORWARD[] = "bw_FORWARD";
 constexpr char BANDWIDTH_NAUGHTY[] = "bw_penalty_box";
 constexpr char BANDWIDTH_NICE[] = "bw_happy_box";
+constexpr char BANDWIDTH_ALERT[] = "bw_global_alert";
 
-// TODO: move iptablesTargetsExists and listIptablesRuleByTable to the top.
+// TODO: Move iptablesTargetsExists and listIptablesRuleByTable to the top.
+//       Use either a std::vector<std::string> of things to match, or a variadic function.
 bool iptablesTargetsExists(const char* binary, int expectedCount, const char* table,
                            const char* chainName, const std::string& expectedTargetA,
                            const std::string& expectedTargetB) {
@@ -1452,8 +1464,7 @@ void expectBandwidthGlobalAlertRuleExists(long alertBytes) {
     static const char globalAlertName[] = "globalAlert";
 
     for (const auto& binary : {IPTABLES_PATH, IP6TABLES_PATH}) {
-        EXPECT_TRUE(iptablesRuleExists(binary, BANDWIDTH_INPUT, globalAlertRule));
-        EXPECT_TRUE(iptablesRuleExists(binary, BANDWIDTH_OUTPUT, globalAlertRule));
+        EXPECT_TRUE(iptablesRuleExists(binary, BANDWIDTH_ALERT, globalAlertRule));
     }
     expectXtQuotaValueEqual(globalAlertName, alertBytes);
 }
@@ -2638,4 +2649,99 @@ TEST_F(BinderTest, InterfaceSetMtu) {
 
     // Remove test physical network
     EXPECT_TRUE(mNetd->networkDestroy(TEST_NETID1).isOk());
+}
+
+namespace {
+
+constexpr const char TETHER_FORWARD[] = "tetherctrl_FORWARD";
+constexpr const char TETHER_NAT_POSTROUTING[] = "tetherctrl_nat_POSTROUTING";
+constexpr const char TETHER_RAW_PREROUTING[] = "tetherctrl_raw_PREROUTING";
+constexpr const char TETHER_COUNTERS_CHAIN[] = "tetherctrl_counters";
+
+int iptablesCountRules(const char* binary, const char* table, const char* chainName) {
+    return listIptablesRuleByTable(binary, table, chainName).size();
+}
+
+bool iptablesChainMatch(const char* binary, const char* table, const char* chainName,
+                        const std::vector<std::string>& targetVec) {
+    std::vector<std::string> rules = listIptablesRuleByTable(binary, table, chainName);
+    if (targetVec.size() != rules.size() - 2) {
+        return false;
+    }
+
+    /*
+     * Check that the rules match. Note that this function matches substrings, not entire rules,
+     * because otherwise rules where "pkts" or "bytes" are nonzero would not match.
+     * Skip first two lines since rules start from third line.
+     * Chain chainName (x references)
+     * pkts bytes target     prot opt in     out     source               destination
+     * ...
+     */
+    int rIndex = 2;
+    for (const auto& target : targetVec) {
+        if (rules[rIndex].find(target) == std::string::npos) {
+            return false;
+        }
+        rIndex++;
+    }
+    return true;
+}
+
+void expectNatEnable(const std::string& intIf, const std::string& extIf) {
+    std::vector<std::string> postroutingV4Match = {"MASQUERADE"};
+    std::vector<std::string> preroutingV4Match = {"CT helper ftp", "CT helper pptp"};
+    std::vector<std::string> forwardV4Match = {
+            "bw_global_alert", "state RELATED", "state INVALID",
+            StringPrintf("tetherctrl_counters  all  --  %s %s", intIf.c_str(), extIf.c_str()),
+            "DROP"};
+
+    // V4
+    EXPECT_TRUE(iptablesChainMatch(IPTABLES_PATH, NAT_TABLE, TETHER_NAT_POSTROUTING,
+                                   postroutingV4Match));
+    EXPECT_TRUE(
+            iptablesChainMatch(IPTABLES_PATH, RAW_TABLE, TETHER_RAW_PREROUTING, preroutingV4Match));
+    EXPECT_TRUE(iptablesChainMatch(IPTABLES_PATH, FILTER_TABLE, TETHER_FORWARD, forwardV4Match));
+
+    std::vector<std::string> forwardV6Match = {"bw_global_alert", "tetherctrl_counters"};
+    std::vector<std::string> preroutingV6Match = {"rpfilter invert"};
+
+    // V6
+    EXPECT_TRUE(iptablesChainMatch(IP6TABLES_PATH, FILTER_TABLE, TETHER_FORWARD, forwardV6Match));
+    EXPECT_TRUE(iptablesChainMatch(IP6TABLES_PATH, RAW_TABLE, TETHER_RAW_PREROUTING,
+                                   preroutingV6Match));
+
+    for (const auto& binary : {IPTABLES_PATH, IP6TABLES_PATH}) {
+        EXPECT_TRUE(iptablesTargetsExists(binary, 2, FILTER_TABLE, TETHER_COUNTERS_CHAIN, intIf,
+                                          extIf));
+    }
+}
+
+void expectNatDisable() {
+    // It is the default DROP rule with tethering disable.
+    // Chain tetherctrl_FORWARD (1 references)
+    // pkts bytes target     prot opt in     out     source               destination
+    //    0     0 DROP       all  --  *      *       0.0.0.0/0            0.0.0.0/0
+    std::vector<std::string> forwardV4Match = {"DROP"};
+    EXPECT_TRUE(iptablesChainMatch(IPTABLES_PATH, FILTER_TABLE, TETHER_FORWARD, forwardV4Match));
+
+    // We expect that these chains should be empty.
+    EXPECT_EQ(2, iptablesCountRules(IPTABLES_PATH, NAT_TABLE, TETHER_NAT_POSTROUTING));
+    EXPECT_EQ(2, iptablesCountRules(IPTABLES_PATH, RAW_TABLE, TETHER_RAW_PREROUTING));
+
+    EXPECT_EQ(2, iptablesCountRules(IP6TABLES_PATH, FILTER_TABLE, TETHER_FORWARD));
+    EXPECT_EQ(2, iptablesCountRules(IP6TABLES_PATH, RAW_TABLE, TETHER_RAW_PREROUTING));
+
+    // Netd won't clear tether quota rule, we don't care rule in tetherctrl_counters.
+}
+
+}  // namespace
+
+TEST_F(BinderTest, TetherForwardAddRemove) {
+    binder::Status status = mNetd->tetherAddForward(sTun.name(), sTun2.name());
+    EXPECT_TRUE(status.isOk()) << status.exceptionMessage();
+    expectNatEnable(sTun.name(), sTun2.name());
+
+    status = mNetd->tetherRemoveForward(sTun.name(), sTun2.name());
+    EXPECT_TRUE(status.isOk()) << status.exceptionMessage();
+    expectNatDisable();
 }
