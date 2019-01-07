@@ -393,8 +393,9 @@ int res_nsend(res_state statp, const u_char* buf, int buflen, u_char* ans, int a
     ResolvCacheStatus cache_status = RESOLV_CACHE_UNSUPPORTED;
 
     if (anssiz < HFIXEDSZ) {
+        // TODO: Remove errno once callers stop using it
         errno = EINVAL;
-        return (-1);
+        return -EINVAL;
     }
     DprintQ((statp->options & RES_DEBUG) || (statp->pfcode & RES_PRF_QUERY),
             (stdout, ";; res_send()\n"), buf, buflen);
@@ -417,8 +418,10 @@ int res_nsend(res_state statp, const u_char* buf, int buflen, u_char* ans, int a
         // Tell the cache the query failed, or any retries and anyone else asking the same
         // question will block for PENDING_REQUEST_TIMEOUT seconds instead of failing fast.
         _resolv_cache_query_failed(statp->netid, buf, buflen);
+
+        // TODO: Remove errno once callers stop using it
         errno = ESRCH;
-        return (-1);
+        return -ESRCH;
     }
 
     /*
@@ -538,7 +541,9 @@ int res_nsend(res_state statp, const u_char* buf, int buflen, u_char* ans, int a
                     return resplen;
                 }
                 if (!fallback) {
-                    goto fail;
+                    _resolv_cache_query_failed(statp->netid, buf, buflen);
+                    res_nclose(statp);
+                    return -terrno;
                 }
             }
 
@@ -570,7 +575,11 @@ int res_nsend(res_state statp, const u_char* buf, int buflen, u_char* ans, int a
 
                 VLOG << "used send_vc " << n;
 
-                if (n < 0) goto fail;
+                if (n < 0) {
+                    _resolv_cache_query_failed(statp->netid, buf, buflen);
+                    res_nclose(statp);
+                    return -terrno;
+                };
                 if (n == 0) goto next_ns;
                 resplen = n;
             } else {
@@ -590,7 +599,11 @@ int res_nsend(res_state statp, const u_char* buf, int buflen, u_char* ans, int a
 
                 VLOG << "used send_dg " << n;
 
-                if (n < 0) goto fail;
+                if (n < 0) {
+                    _resolv_cache_query_failed(statp->netid, buf, buflen);
+                    res_nclose(statp);
+                    return -terrno;
+                };
                 if (n == 0) goto next_ns;
                 VLOG << "time=" << time(NULL);
                 if (v_circuit) goto same_ns;
@@ -622,21 +635,21 @@ int res_nsend(res_state statp, const u_char* buf, int buflen, u_char* ans, int a
     }  // for each retry
     res_nclose(statp);
     if (!v_circuit) {
-        if (!gotsomewhere)
+        if (!gotsomewhere) {
+            // TODO: Remove errno once callers stop using it
             errno = ECONNREFUSED; /* no nameservers found */
-        else
+            terrno = ECONNREFUSED;
+        } else {
+            // TODO: Remove errno once callers stop using it
             errno = ETIMEDOUT; /* no answer obtained */
-    } else
+            terrno = ETIMEDOUT;
+        }
+    } else {
         errno = terrno;
-
+    }
     _resolv_cache_query_failed(statp->netid, buf, buflen);
 
-    return (-1);
-fail:
-
-    _resolv_cache_query_failed(statp->netid, buf, buflen);
-    res_nclose(statp);
-    return (-1);
+    return -terrno;
 }
 
 /* Private */
@@ -1238,6 +1251,15 @@ static int res_tls_send(res_state statp, const Slice query, const Slice answer, 
             // Sleep and iterate some small number of times checking for the
             // arrival of resolved and validated server IP addresses, instead
             // of returning an immediate error.
+            // This is needed because as soon as a network becomes the default network, apps will
+            // send DNS queries on that network. If no servers have yet validated, and we do not
+            // block those queries, they would immediately fail, causing application-visible errors.
+            // Note that this can happen even before the network validates, since an unvalidated
+            // network can become the default network if no validated networks are available.
+            //
+            // TODO: see if there is a better way to address this problem, such as buffering the
+            // queries in a queue or only blocking queries for the first few seconds after a default
+            // network change.
             for (int i = 0; i < 42; i++) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 if (!gPrivateDnsConfiguration.getStatus(netId).validatedServers.empty()) {
@@ -1292,4 +1314,13 @@ static int res_tls_send(res_state statp, const Slice query, const Slice answer, 
                 return -1;
         }
     }
+}
+
+int resolv_res_nsend(const android_net_context* netContext, const u_char* msg, int msgLen,
+                     u_char* ans, int ansLen, int* rcode) {
+    res_state res = res_get_state();
+    res_setnetcontext(res, netContext);
+    _resolv_populate_res_for_net(res);
+    *rcode = NOERROR;
+    return res_nsend(res, msg, msgLen, ans, ansLen, rcode);
 }

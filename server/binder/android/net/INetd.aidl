@@ -78,13 +78,12 @@ interface INetd {
      * Creates a VPN network.
      *
      * @param netId the network to create.
-     * @param hasDns whether the VPN has DNS servers.
      * @param secure whether unprivileged apps are allowed to bypass the VPN.
      *
      * @throws ServiceSpecificException in case of failure, with an error code corresponding to the
      *         unix errno.
      */
-    void networkCreateVpn(int netId, boolean hasDns, boolean secure);
+    void networkCreateVpn(int netId, boolean secure);
 
     /**
      * Destroys a network. Any interfaces added to the network are removed, and the network ceases
@@ -315,13 +314,13 @@ interface INetd {
     void setMetricsReportingLevel(int level);
 
    /**
-    * Sets owner of socket FileDescriptor to the new UID, checking to ensure that the caller's
+    * Sets owner of socket ParcelFileDescriptor to the new UID, checking to ensure that the caller's
     * uid is that of the old owner's, and that this is a UDP-encap socket
     *
-    * @param FileDescriptor socket Socket file descriptor
+    * @param ParcelFileDescriptor socket Socket file descriptor
     * @param int newUid UID of the new socket fd owner
     */
-    void ipSecSetEncapSocketOwner(in FileDescriptor socket, int newUid);
+    void ipSecSetEncapSocketOwner(in ParcelFileDescriptor socket, int newUid);
 
    /**
     * Reserve an SPI from the kernel
@@ -415,7 +414,7 @@ interface INetd {
     * @param spi a 32-bit unique ID allocated to the user (socket owner)
     */
     void ipSecApplyTransportModeTransform(
-            in FileDescriptor socket,
+            in ParcelFileDescriptor socket,
             int transformId,
             int direction,
             in @utf8InCpp String sourceAddress,
@@ -429,7 +428,7 @@ interface INetd {
     * @param socket a user-provided socket from which to remove any IPsec configuration
     */
     void ipSecRemoveTransportModeTransform(
-            in FileDescriptor socket);
+            in ParcelFileDescriptor socket);
 
    /**
     * Adds an IPsec global policy.
@@ -823,12 +822,12 @@ interface INetd {
     * Get the interface list which is stored in netd
     * The list contains the interfaces managed by tetherInterfaceAdd/tetherInterfaceRemove
     *
-    * @return ifList interface list result
+    * @return An array of strings containing interface list result
     */
-    @utf8InCpp List<String> tetherInterfaceList();
+    @utf8InCpp String[] tetherInterfaceList();
 
    /**
-    * Set dns forwarder server
+    * Set DNS forwarder server
     *
     * @param netId the upstream network to forward DNS queries to
     * @param dnsAddrs DNS server address to set
@@ -840,9 +839,9 @@ interface INetd {
    /**
     * Return the DNS list set by tetherDnsSet
     *
-    * @return dnsList dns list result
+    * @return An array of strings containing the list of DNS servers
     */
-    @utf8InCpp List<String> tetherDnsList();
+    @utf8InCpp String[] tetherDnsList();
 
     const int LOCAL_NET_ID = 99;
 
@@ -1082,11 +1081,11 @@ interface INetd {
    /**
     * Get interface list
     *
-    * @return A list of all the interfaces on the system.
+    * @return An array of strings containing all the interfaces on the system.
     * @throws ServiceSpecificException in case of failure, with an error code corresponding to the
     *         unix errno.
     */
-    @utf8InCpp List<String> interfaceGetList();
+    @utf8InCpp String[] interfaceGetList();
 
     const String IF_STATE_UP = "up";
     const String IF_STATE_DOWN = "down";
@@ -1169,4 +1168,28 @@ interface INetd {
     * @param extIface upstream interface
     */
     void tetherRemoveForward(in @utf8InCpp String intIface, in @utf8InCpp String extIface);
+
+   /**
+    * Set the values of tcp_{rmem,wmem}.
+    *
+    * @param rmemValues the target values of tcp_rmem, each value is separated by spaces
+    * @param wmemValues the target values of tcp_wmem, each value is separated by spaces
+    * @throws ServiceSpecificException in case of failure, with an error code indicating the
+    *         cause of the the failure.
+    */
+    void setTcpRWmemorySize(in @utf8InCpp String rmemValues, in @utf8InCpp String wmemValues);
+
+    /**
+     * Get NAT64 prefix in format Pref64::/n which is described in RFC6147 section 2. This
+     * interface is used for internal test only. Don't use it for other purposes because doing so
+     * would cause race conditions with the NAT64 prefix notifications.
+     *
+     * @param netId the network ID of the network to get the prefix
+     * @return the NAT64 prefix if the query operation was successful
+     * @throws ServiceSpecificException in case of failure, with an error code indicating the
+     *         cause of the the failure.
+     *
+     * TODO: Remove this once the tests have been updated to listen for onNat64PrefixEvent.
+     */
+    @utf8InCpp String getPrefix64(int netId);
 }

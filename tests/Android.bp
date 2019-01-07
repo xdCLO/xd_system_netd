@@ -32,7 +32,6 @@ cc_test {
     defaults: ["netd_defaults"],
     srcs: [
         ":netd_integration_test_shared",
-        ":netd_metrics_aidl",
         "binder_test.cpp",
         "bpf_base_test.cpp",
         "netd_test.cpp",
@@ -50,17 +49,16 @@ cc_test {
         "libssl",
         "libutils",
         "libqtaguid",
-        "netd_aidl_interface-cpp",
     ],
     static_libs: [
         "libcap",
         "libnetd_test_tun_interface",
         "libbpf_android",
         "liblogwrap",
-        "libnetdaidl",
         "libnetdbpf",
         "libnetdutils",
         "netd_aidl_interface-cpp",
+        "netd_event_listener_interface-cpp",
     ],
     compile_multilib: "both",
     multilib: {
