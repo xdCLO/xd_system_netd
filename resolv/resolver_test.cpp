@@ -585,8 +585,8 @@ TEST_F(ResolverTest, GetAddrInfoForCaseInSensitiveDomains) {
     dns.addMapping(host_name2, ns_type::ns_t_aaaa, "::1.2.3.5");
     ASSERT_TRUE(dns.startServer());
     std::vector<std::string> servers = { listen_addr };
-    ASSERT_TRUE(mDnsClient.SetResolversForNetwork(servers, mDefaultSearchDomains,
-            mDefaultParams));
+    ASSERT_TRUE(mDnsClient.SetResolversForNetwork(servers, kDefaultSearchDomains,
+            kDefaultParams));
     dns.clearQueries();
     result = safe_getaddrinfo("howdy", nullptr, nullptr);
     EXPECT_TRUE(result != nullptr);
