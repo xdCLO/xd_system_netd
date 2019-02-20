@@ -82,7 +82,6 @@ using android::base::ReadFileToString;
 using android::base::StartsWith;
 using android::base::StringPrintf;
 using android::base::Trim;
-using android::bpf::hasBpfSupport;
 using android::net::INetd;
 using android::net::InterfaceConfigurationParcel;
 using android::net::InterfaceController;
@@ -90,11 +89,6 @@ using android::net::TetherStatsParcel;
 using android::net::TunInterface;
 using android::net::UidRangeParcel;
 using android::netdutils::sSyscalls;
-
-#define SKIP_IF_BPF_SUPPORTED        \
-    do {                             \
-        if (hasBpfSupport()) return; \
-    } while (0)
 
 static const char* IP_RULE_V4 = "-4";
 static const char* IP_RULE_V6 = "-6";
@@ -1386,16 +1380,22 @@ TEST_F(BinderTest, TestIpfwdEnableDisableStatusForwarding) {
 }
 
 TEST_F(BinderTest, TestIpfwdAddRemoveInterfaceForward) {
-    static const char testFromIf[] = "dummy0";
-    static const char testToIf[] = "dummy0";
+  // Add test physical network
+  EXPECT_TRUE(
+      mNetd->networkCreatePhysical(TEST_NETID1, INetd::PERMISSION_NONE).isOk());
+  EXPECT_TRUE(mNetd->networkAddInterface(TEST_NETID1, sTun.name()).isOk());
+  EXPECT_TRUE(
+      mNetd->networkCreatePhysical(TEST_NETID2, INetd::PERMISSION_NONE).isOk());
+  EXPECT_TRUE(mNetd->networkAddInterface(TEST_NETID2, sTun2.name()).isOk());
 
-    binder::Status status = mNetd->ipfwdAddInterfaceForward(testFromIf, testToIf);
-    EXPECT_TRUE(status.isOk()) << status.exceptionMessage();
-    expectIpfwdRuleExists(testFromIf, testToIf);
+  binder::Status status =
+      mNetd->ipfwdAddInterfaceForward(sTun.name(), sTun2.name());
+  EXPECT_TRUE(status.isOk()) << status.exceptionMessage();
+  expectIpfwdRuleExists(sTun.name().c_str(), sTun2.name().c_str());
 
-    status = mNetd->ipfwdRemoveInterfaceForward(testFromIf, testToIf);
-    EXPECT_TRUE(status.isOk()) << status.exceptionMessage();
-    expectIpfwdRuleNotExists(testFromIf, testToIf);
+  status = mNetd->ipfwdRemoveInterfaceForward(sTun.name(), sTun2.name());
+  EXPECT_TRUE(status.isOk()) << status.exceptionMessage();
+  expectIpfwdRuleNotExists(sTun.name().c_str(), sTun2.name().c_str());
 }
 
 namespace {
