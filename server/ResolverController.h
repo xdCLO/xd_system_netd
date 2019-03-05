@@ -23,7 +23,7 @@
 #include "Dns64Configuration.h"
 #include "netdutils/InternetAddresses.h"
 
-struct __res_params;
+struct res_params;
 
 namespace android {
 namespace net {
@@ -41,12 +41,12 @@ class ResolverController {
 
     // TODO: delete this function
     int setDnsServers(unsigned netId, const char* searchDomains, const char** servers,
-            int numservers, const __res_params* params);
+                      int numservers, const res_params* params);
 
     int clearDnsServers(unsigned netid);
 
     int getDnsInfo(unsigned netId, std::vector<std::string>* servers,
-                   std::vector<std::string>* domains, __res_params* params,
+                   std::vector<std::string>* domains, res_params* params,
                    std::vector<android::net::ResolverStats>* stats,
                    std::vector<int32_t>* wait_for_pending_req_timeout_count);
 
@@ -65,6 +65,9 @@ class ResolverController {
                         std::vector<int32_t>* wait_for_pending_req_timeout_count);
 
     void sendNat64PrefixEvent(const net::Dns64Configuration::Nat64PrefixInfo& args);
+
+    void startPrefix64Discovery(int32_t netId);
+    void stopPrefix64Discovery(int32_t netId);
 
     bool initResolver();
 

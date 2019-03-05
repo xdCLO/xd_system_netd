@@ -180,7 +180,8 @@ interface INetd {
     const int RESOLVER_PARAMS_MIN_SAMPLES = 2;
     const int RESOLVER_PARAMS_MAX_SAMPLES = 3;
     const int RESOLVER_PARAMS_BASE_TIMEOUT_MSEC = 4;
-    const int RESOLVER_PARAMS_COUNT = 5;
+    const int RESOLVER_PARAMS_RETRY_COUNT = 5;
+    const int RESOLVER_PARAMS_COUNT = 6;
 
     /**
      * Sets the name servers, search domains and resolver params for the given network. Flushes the
@@ -190,8 +191,8 @@ interface INetd {
      * @param servers the DNS servers to configure for the network.
      * @param domains the search domains to configure.
      * @param params the params to set. This array contains RESOLVER_PARAMS_COUNT integers that
-     *   encode the contents of Bionic's __res_params struct, i.e. sample_validity is stored at
-     *   position RESOLVER_PARAMS_SAMPLE_VALIDITY, etc.
+     *   encode the contents of the res_params struct, i.e. sample_validity is stored at position
+     *   RESOLVER_PARAMS_SAMPLE_VALIDITY, etc.
      * @param tlsName The TLS subject name to require for all servers, or empty if there is none.
      * @param tlsServers the DNS servers to configure for strict mode Private DNS.
      * @param tlsFingerprints An array containing TLS public key fingerprints (pins) of which each
@@ -222,7 +223,7 @@ interface INetd {
      * @param servers the DNS servers that are currently configured for the network.
      * @param domains the search domains currently configured.
      * @param tlsServers the DNS-over-TLS servers that are currently configured for the network.
-     * @param params the resolver parameters configured, i.e. the contents of __res_params in order.
+     * @param params the resolver parameters configured, i.e. the contents of res_params in order.
      * @param stats the stats for each server in the order specified by RESOLVER_STATS_XXX
      *         constants, serialized as an int array. The contents of this array are the number of
      *         <ul>
@@ -246,6 +247,20 @@ interface INetd {
     void getResolverInfo(int netId, out @utf8InCpp String[] servers,
             out @utf8InCpp String[] domains, out @utf8InCpp String[] tlsServers, out int[] params,
             out int[] stats, out int[] wait_for_pending_req_timeout_count);
+
+    /**
+     * Starts NAT64 prefix discovery on the given network.
+     *
+     * @param netId the netId to start prefix discovery on.
+     */
+    void resolverStartPrefix64Discovery(int netId);
+
+    /**
+     * Stops NAT64 prefix discovery on the given network.
+     *
+     * @param netId the netId to stop prefix discovery on.
+     */
+    void resolverStopPrefix64Discovery(int netId);
 
     /**
      * Instruct the tethering DNS server to reevaluated serving interfaces.
@@ -614,10 +629,12 @@ interface INetd {
     * Start clatd
     *
     * @param ifName interface name to start clatd
+    * @param nat64Prefix the NAT64 prefix, e.g., "2001:db8:64::/96".
+    * @return a string, the IPv6 address that will be used for 464xlat.
     * @throws ServiceSpecificException in case of failure, with an error code indicating the
     *         cause of the the failure.
     */
-    void clatdStart(in @utf8InCpp String ifName);
+    @utf8InCpp String clatdStart(in @utf8InCpp String ifName, in @utf8InCpp String nat64Prefix);
 
    /**
     * Stop clatd
