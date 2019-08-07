@@ -30,7 +30,7 @@
  * SUCH DAMAGE.
  */
 
-#define LOG_TAG "getaddrinfo"
+#define LOG_TAG "resolv"
 
 #include "getaddrinfo.h"
 
@@ -45,7 +45,6 @@
 #include <netinet/in.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/param.h>

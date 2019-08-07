@@ -12,8 +12,6 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
- * binder_test.cpp - unit tests for netd binder RPCs.
  */
 
 #ifdef NDEBUG
@@ -283,7 +281,7 @@ TEST_F(DnsResolverBinderTest, GetResolverInfo) {
             25,      // success threshod in percent
             8,   8,  // {MIN,MAX}_SAMPLES
             100,     // BASE_TIMEOUT_MSEC
-            2,       // retry count
+            3,       // retry count
     };
     const auto resolverParams =
             makeResolverParamsParcel(TEST_NETID, testParams, servers, domains, "", {}, {});
@@ -315,6 +313,8 @@ TEST_F(DnsResolverBinderTest, GetResolverInfo) {
               params32[IDnsResolver::RESOLVER_PARAMS_MAX_SAMPLES]);
     EXPECT_EQ(testParams[IDnsResolver::RESOLVER_PARAMS_BASE_TIMEOUT_MSEC],
               params32[IDnsResolver::RESOLVER_PARAMS_BASE_TIMEOUT_MSEC]);
+    EXPECT_EQ(testParams[IDnsResolver::RESOLVER_PARAMS_RETRY_COUNT],
+              params32[IDnsResolver::RESOLVER_PARAMS_RETRY_COUNT]);
 
     std::vector<ResolverStats> stats;
     ResolverStats::decodeAll(stats32, &stats);

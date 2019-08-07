@@ -70,14 +70,13 @@
  * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#define LOG_TAG "res_mkquery"
+#define LOG_TAG "resolv"
 
 #include <algorithm>  // std::min()
 
 #include <arpa/nameser.h>
 #include <netdb.h>
 #include <netinet/in.h>
-#include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
 
