@@ -26,13 +26,12 @@
  * SUCH DAMAGE.
  */
 
-#define LOG_TAG "res_cache"
+#define LOG_TAG "resolv"
 
 #include "resolv_cache.h"
 
 #include <resolv.h>
 #include <stdarg.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
