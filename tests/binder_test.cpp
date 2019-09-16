@@ -21,8 +21,8 @@
 #include <cinttypes>
 #include <condition_variable>
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
+#include <iostream>
 #include <mutex>
 #include <set>
 #include <vector>
@@ -50,7 +50,6 @@
 #include <com/android/internal/net/IOemNetd.h>
 #include <cutils/multiuser.h>
 #include <gtest/gtest.h>
-#include <logwrap/logwrap.h>
 #include <netdbpf/bpf_shared.h>
 #include <netutils/ifc.h>
 #include "Fwmark.h"
@@ -61,12 +60,13 @@
 #include "XfrmController.h"
 #include "android/net/INetd.h"
 #include "binder/IServiceManager.h"
+#include "netdutils/InternetAddresses.h"
 #include "netdutils/Stopwatch.h"
 #include "netdutils/Syscalls.h"
 #include "netid_client.h"  // NETID_UNSET
+#include "test_utils.h"
 #include "tun_interface.h"
 
-#define IP_PATH "/system/bin/ip"
 #define IP6TABLES_PATH "/system/bin/ip6tables"
 #define IPTABLES_PATH "/system/bin/iptables"
 #define TUN_DEV "/dev/tun"
@@ -93,6 +93,7 @@ using android::net::InterfaceController;
 using android::net::TetherStatsParcel;
 using android::net::TunInterface;
 using android::net::UidRangeParcel;
+using android::netdutils::ScopedAddrinfo;
 using android::netdutils::sSyscalls;
 using android::netdutils::Stopwatch;
 
@@ -170,7 +171,7 @@ class TimedOperation : public Stopwatch {
   public:
     explicit TimedOperation(const std::string &name): mName(name) {}
     virtual ~TimedOperation() {
-        fprintf(stderr, "    %s: %6.1f ms\n", mName.c_str(), timeTaken());
+        std::cerr << "    " << mName << ": " << timeTakenUs() << "us" << std::endl;
     }
 
   private:
@@ -182,57 +183,6 @@ TEST_F(BinderTest, IsAlive) {
     bool isAlive = false;
     mNetd->isAlive(&isAlive);
     ASSERT_TRUE(isAlive);
-}
-
-static int randomUid() {
-    return 100000 * arc4random_uniform(7) + 10000 + arc4random_uniform(5000);
-}
-
-static std::vector<std::string> runCommand(const std::string& command) {
-    std::vector<std::string> lines;
-    FILE *f = popen(command.c_str(), "r");  // NOLINT(cert-env33-c)
-    if (f == nullptr) {
-        perror("popen");
-        return lines;
-    }
-
-    char *line = nullptr;
-    size_t bufsize = 0;
-    ssize_t linelen = 0;
-    while ((linelen = getline(&line, &bufsize, f)) >= 0) {
-        lines.push_back(std::string(line, linelen));
-        free(line);
-        line = nullptr;
-    }
-
-    pclose(f);
-    return lines;
-}
-
-static std::vector<std::string> listIpRules(const char *ipVersion) {
-    std::string command = StringPrintf("%s %s rule list", IP_PATH, ipVersion);
-    return runCommand(command);
-}
-
-static std::vector<std::string> listIptablesRule(const char *binary, const char *chainName) {
-    std::string command = StringPrintf("%s -w -n -L %s", binary, chainName);
-    return runCommand(command);
-}
-
-static int iptablesRuleLineLength(const char *binary, const char *chainName) {
-    return listIptablesRule(binary, chainName).size();
-}
-
-static bool iptablesRuleExists(const char *binary,
-                               const char *chainName,
-                               const std::string& expectedRule) {
-    std::vector<std::string> rules = listIptablesRule(binary, chainName);
-    for (const auto& rule : rules) {
-        if(rule.find(expectedRule) != std::string::npos) {
-            return true;
-        }
-    }
-    return false;
 }
 
 static bool iptablesNoSocketAllowRuleExists(const char *chainName){
@@ -628,22 +578,18 @@ TEST_F(BinderTest, NetworkRejectNonSecureVpn) {
 
     std::vector<UidRangeParcel> uidRanges = {makeUidRangeParcel(BASE_UID + 150, BASE_UID + 224),
                                              makeUidRangeParcel(BASE_UID + 226, BASE_UID + 300)};
-
-    const std::vector<std::string> initialRulesV4 = listIpRules(IP_RULE_V4);
-    const std::vector<std::string> initialRulesV6 = listIpRules(IP_RULE_V6);
-
+    // Make sure no rules existed before calling commands.
+    for (auto const& range : uidRanges) {
+        EXPECT_FALSE(ipRuleExistsForRange(RULE_PRIORITY, range, "prohibit"));
+    }
     // Create two valid rules.
     ASSERT_TRUE(mNetd->networkRejectNonSecureVpn(true, uidRanges).isOk());
-    EXPECT_EQ(initialRulesV4.size() + 2, listIpRules(IP_RULE_V4).size());
-    EXPECT_EQ(initialRulesV6.size() + 2, listIpRules(IP_RULE_V6).size());
     for (auto const& range : uidRanges) {
         EXPECT_TRUE(ipRuleExistsForRange(RULE_PRIORITY, range, "prohibit"));
     }
 
     // Remove the rules.
     ASSERT_TRUE(mNetd->networkRejectNonSecureVpn(false, uidRanges).isOk());
-    EXPECT_EQ(initialRulesV4.size(), listIpRules(IP_RULE_V4).size());
-    EXPECT_EQ(initialRulesV6.size(), listIpRules(IP_RULE_V6).size());
     for (auto const& range : uidRanges) {
         EXPECT_FALSE(ipRuleExistsForRange(RULE_PRIORITY, range, "prohibit"));
     }
@@ -652,10 +598,6 @@ TEST_F(BinderTest, NetworkRejectNonSecureVpn) {
     binder::Status status = mNetd->networkRejectNonSecureVpn(false, uidRanges);
     ASSERT_EQ(binder::Status::EX_SERVICE_SPECIFIC, status.exceptionCode());
     EXPECT_EQ(ENOENT, status.serviceSpecificErrorCode());
-
-    // All rules should be the same as before.
-    EXPECT_EQ(initialRulesV4, listIpRules(IP_RULE_V4));
-    EXPECT_EQ(initialRulesV6, listIpRules(IP_RULE_V6));
 }
 
 // Create a socket pair that isLoopbackSocket won't think is local.
@@ -1047,8 +989,11 @@ TEST_F(BinderTest, TetherGetStats) {
     std::string intIface1 = StringPrintf("netdtest_%u", arc4random_uniform(10000));
     std::string intIface2 = StringPrintf("netdtest_%u", arc4random_uniform(10000));
     std::string intIface3 = StringPrintf("netdtest_%u", arc4random_uniform(10000));
-    std::string extIface1 = StringPrintf("netdtest_%u", arc4random_uniform(10000));
-    std::string extIface2 = StringPrintf("netdtest_%u", arc4random_uniform(10000));
+
+    // Ensure we won't use the same interface name, otherwise the test will fail.
+    u_int32_t rNumber = arc4random_uniform(10000);
+    std::string extIface1 = StringPrintf("netdtest_%u", rNumber);
+    std::string extIface2 = StringPrintf("netdtest_%u", rNumber + 1);
 
     addTetherCounterValues(IPTABLES_PATH,  intIface1, extIface1, 123, 111);
     addTetherCounterValues(IP6TABLES_PATH, intIface1, extIface1, 456,  10);
@@ -1621,13 +1566,13 @@ TEST_F(BinderTest, BandwidthSetRemoveInterfaceAlert) {
 }
 
 TEST_F(BinderTest, BandwidthSetGlobalAlert) {
-    long testAlertBytes = 2097149;
+    int64_t testAlertBytes = 2097200;
 
     binder::Status status = mNetd->bandwidthSetGlobalAlert(testAlertBytes);
     EXPECT_TRUE(status.isOk()) << status.exceptionMessage();
     expectBandwidthGlobalAlertRuleExists(testAlertBytes);
 
-    testAlertBytes = 2097152;
+    testAlertBytes = 2098230;
     status = mNetd->bandwidthSetGlobalAlert(testAlertBytes);
     EXPECT_TRUE(status.isOk()) << status.exceptionMessage();
     expectBandwidthGlobalAlertRuleExists(testAlertBytes);
@@ -1662,21 +1607,6 @@ TEST_F(BinderTest, BandwidthManipulateSpecialApp) {
 }
 
 namespace {
-
-std::vector<std::string> listIpRoutes(const char* ipVersion, const char* table) {
-    std::string command = StringPrintf("%s %s route ls table %s", IP_PATH, ipVersion, table);
-    return runCommand(command);
-}
-
-bool ipRouteExists(const char* ipVersion, const char* table, const std::string& ipRoute) {
-    std::vector<std::string> routes = listIpRoutes(ipVersion, table);
-    for (const auto& route : routes) {
-        if (route.find(ipRoute) != std::string::npos) {
-            return true;
-        }
-    }
-    return false;
-}
 
 std::string ipRouteString(const std::string& ifName, const std::string& dst,
                           const std::string& nextHop) {
@@ -1972,16 +1902,20 @@ TEST_F(BinderTest, NetworkPermissionDefault) {
 }
 
 TEST_F(BinderTest, NetworkSetProtectAllowDeny) {
-    const int testUid = randomUid();
-    binder::Status status = mNetd->networkSetProtectAllow(testUid);
+    binder::Status status = mNetd->networkSetProtectAllow(TEST_UID1);
     EXPECT_TRUE(status.isOk()) << status.exceptionMessage();
     bool ret = false;
-    status = mNetd->networkCanProtect(testUid, &ret);
+    status = mNetd->networkCanProtect(TEST_UID1, &ret);
     EXPECT_TRUE(ret);
 
-    status = mNetd->networkSetProtectDeny(testUid);
+    status = mNetd->networkSetProtectDeny(TEST_UID1);
     EXPECT_TRUE(status.isOk()) << status.exceptionMessage();
-    status = mNetd->networkCanProtect(testUid, &ret);
+
+    // Clear uid permission before calling networkCanProtect to ensure
+    // the call won't be affected by uid permission.
+    EXPECT_TRUE(mNetd->networkClearPermissionForUser({TEST_UID1}).isOk());
+
+    status = mNetd->networkCanProtect(TEST_UID1, &ret);
     EXPECT_FALSE(ret);
 }
 

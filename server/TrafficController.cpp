@@ -38,7 +38,6 @@
 #include <android-base/stringprintf.h>
 #include <android-base/strings.h>
 #include <android-base/unique_fd.h>
-#include <logwrap/logwrap.h>
 #include <netdutils/StatusOr.h>
 
 #include <netdutils/Misc.h>
@@ -847,7 +846,7 @@ void TrafficController::setPermissionForUids(int permission, const std::vector<u
             mPrivilegedUser.erase(uid);
             if (mBpfLevel > BpfLevel::NONE) {
                 Status ret = mUidPermissionMap.deleteValue(uid);
-                if (!isOk(ret) && ret.code() != ENONET) {
+                if (!isOk(ret) && ret.code() != ENOENT) {
                     ALOGE("Failed to clean up the permission for %u: %s", uid,
                           strerror(ret.code()));
                 }
@@ -1075,15 +1074,28 @@ void TrafficController::dump(DumpWriter& dw, bool verbose) {
     uint32_t key = UID_RULES_CONFIGURATION_KEY;
     auto configuration = mConfigurationMap.readValue(key);
     if (isOk(configuration)) {
-        dw.println("current ownerMatch configuration: %d", configuration.value());
+        dw.println("current ownerMatch configuration: %d%s", configuration.value(),
+                   uidMatchTypeToString(configuration.value()).c_str());
     } else {
         dw.println("mConfigurationMap read ownerMatch configure failed with error: %s",
                    configuration.status().msg().c_str());
     }
+
     key = CURRENT_STATS_MAP_CONFIGURATION_KEY;
     configuration = mConfigurationMap.readValue(key);
     if (isOk(configuration)) {
-        dw.println("current statsMap configuration: %d", configuration.value());
+        const char* statsMapDescription = "???";
+        switch (configuration.value()) {
+            case SELECT_MAP_A:
+                statsMapDescription = "SELECT_MAP_A";
+                break;
+            case SELECT_MAP_B:
+                statsMapDescription = "SELECT_MAP_B";
+                break;
+                // No default clause, so if we ever add a third map, this code will fail to build.
+        }
+        dw.println("current statsMap configuration: %d %s", configuration.value(),
+                   statsMapDescription);
     } else {
         dw.println("mConfigurationMap read stats map configure failed with error: %s",
                    configuration.status().msg().c_str());
