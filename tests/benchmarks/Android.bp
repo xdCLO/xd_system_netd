@@ -9,10 +9,10 @@ cc_benchmark {
         "liblog",
         "libnetd_client",
         "libnetdutils",
+        "libutils",
     ],
     static_libs: [
         "libnetd_test_dnsresponder",
-        "libutils",
         "dnsresolver_aidl_interface-cpp",
         "netd_aidl_interface-cpp",
         "netd_event_listener_interface-cpp",
@@ -23,10 +23,11 @@ cc_benchmark {
     include_dirs: [
         "system/netd/include",
         "system/netd/client",
-        "system/netd/resolv/include",
         "system/netd/server",
         "system/netd/server/binder",
-        "system/netd/resolv/dns_responder",
+    ],
+    header_libs: [
+        "libnetd_resolv_headers",
     ],
     srcs: [
         "main.cpp",
@@ -42,9 +43,6 @@ cc_benchmark {
         "libbase",
         "libbpf_android",
         "libnetdutils",
-    ],
-    static_libs: [
-        "libutils",
     ],
     srcs: [
         "bpf_benchmark.cpp",
