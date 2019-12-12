@@ -104,14 +104,21 @@ static inline __always_inline int nat64(struct __sk_buff* skb, bool is_ethernet)
     };
 
     // Calculate the IPv4 one's complement checksum of the IPv4 header.
-    __wsum sum = 0;
+    __wsum sum4 = 0;
     for (int i = 0; i < sizeof(ip) / sizeof(__u16); ++i) {
-        sum += ((__u16*)&ip)[i];
+        sum4 += ((__u16*)&ip)[i];
     }
-    // Note that sum is guaranteed to be non-zero by virtue of ip.version == 4
-    sum = (sum & 0xFFFF) + (sum >> 16);  // collapse u32 into range 1 .. 0x1FFFE
-    sum = (sum & 0xFFFF) + (sum >> 16);  // collapse any potential carry into u16
-    ip.check = (__u16)~sum;              // sum cannot be zero, so this is never 0xFFFF
+    // Note that sum4 is guaranteed to be non-zero by virtue of ip.version == 4
+    sum4 = (sum4 & 0xFFFF) + (sum4 >> 16);  // collapse u32 into range 1 .. 0x1FFFE
+    sum4 = (sum4 & 0xFFFF) + (sum4 >> 16);  // collapse any potential carry into u16
+    ip.check = (__u16)~sum4;                // sum4 cannot be zero, so this is never 0xFFFF
+
+    // Calculate the *negative* IPv6 16-bit one's complement checksum of the IPv6 header.
+    __wsum sum6 = 0;
+    // We'll end up with a non-zero sum due to ip6->version == 6 (which has '0' bits)
+    for (int i = 0; i < sizeof(*ip6) / sizeof(__u16); ++i) {
+        sum6 += ~((__u16*)ip6)[i];  // note the bitwise negation
+    }
 
     // Note that there is no L4 checksum update: we are relying on the checksum neutrality
     // of the ipv6 address chosen by netd's ClatdController.
@@ -119,6 +126,23 @@ static inline __always_inline int nat64(struct __sk_buff* skb, bool is_ethernet)
     // Packet mutations begin - point of no return, but if this first modification fails
     // the packet is probably still pristine, so let clatd handle it.
     if (bpf_skb_change_proto(skb, htons(ETH_P_IP), 0)) return TC_ACT_OK;
+
+    // This takes care of updating the skb->csum field for a CHECKSUM_COMPLETE packet.
+    //
+    // In such a case, skb->csum is a 16-bit one's complement sum of the entire payload,
+    // thus we need to subtract out the ipv6 header's sum, and add in the ipv4 header's sum.
+    // However, by construction of ip.check above the checksum of an ipv4 header is zero.
+    // Thus we only need to subtract the ipv6 header's sum, which is the same as adding
+    // in the sum of the bitwise negation of the ipv6 header.
+    //
+    // bpf_csum_update() always succeeds if the skb is CHECKSUM_COMPLETE and returns an error
+    // (-ENOTSUPP) if it isn't.  So we just ignore the return code.
+    //
+    // if (skb->ip_summed == CHECKSUM_COMPLETE)
+    //   return (skb->csum = csum_add(skb->csum, csum));
+    // else
+    //   return -ENOTSUPP;
+    bpf_csum_update(skb, sum6);
 
     // bpf_skb_change_proto() invalidates all pointers - reload them.
     data = (void*)(long)skb->data;
