@@ -38,7 +38,6 @@
 #include <openssl/base64.h>
 #include <sys/socket.h>
 #include <sys/types.h>
-#include <sys/utsname.h>
 
 #include <android-base/file.h>
 #include <android-base/macros.h>
@@ -72,7 +71,6 @@
 
 #define IP6TABLES_PATH "/system/bin/ip6tables"
 #define IPTABLES_PATH "/system/bin/iptables"
-#define TUN_DEV "/dev/tun"
 #define RAW_TABLE "raw"
 #define MANGLE_TABLE "mangle"
 #define FILTER_TABLE "filter"
@@ -1355,11 +1353,6 @@ void expectIpfwdRuleNotExists(const char* fromIf, const char* toIf) {
 }  // namespace
 
 TEST_F(BinderTest, TestIpfwdEnableDisableStatusForwarding) {
-    // Disable test on 5.x kernels.
-    utsname u;
-    uname(&u);
-    if (u.release[0] == '5') return;
-
     // Get ipfwd requester list from Netd
     std::vector<std::string> requesterList;
     binder::Status status = mNetd->ipfwdGetRequesterList(&requesterList);
@@ -1635,26 +1628,52 @@ TEST_F(BinderTest, BandwidthManipulateSpecialApp) {
 namespace {
 
 std::string ipRouteString(const std::string& ifName, const std::string& dst,
-                          const std::string& nextHop) {
+                          const std::string& nextHop, const std::string& mtu) {
     std::string dstString = (dst == "0.0.0.0/0" || dst == "::/0") ? "default" : dst;
 
     if (!nextHop.empty()) {
         dstString += " via " + nextHop;
     }
 
-    return dstString + " dev " + ifName;
+    dstString += " dev " + ifName;
+
+    if (!mtu.empty()) {
+        dstString += " proto static";
+        // IPv6 routes report the metric, IPv4 routes report the scope.
+        // TODO: move away from specifying the entire string and use a regexp instead.
+        if (dst.find(':') != std::string::npos) {
+            dstString += " metric 1024";
+        } else {
+            if (nextHop.empty()) {
+                dstString += " scope link";
+            }
+        }
+        dstString += " mtu " + mtu;
+    }
+
+    return dstString;
+}
+
+void expectNetworkRouteExistsWithMtu(const char* ipVersion, const std::string& ifName,
+                                     const std::string& dst, const std::string& nextHop,
+                                     const std::string& mtu, const char* table) {
+    std::string routeString = ipRouteString(ifName, dst, nextHop, mtu);
+    EXPECT_TRUE(ipRouteExists(ipVersion, table, ipRouteString(ifName, dst, nextHop, mtu)))
+            << "Couldn't find route to " << dst << ": '" << routeString << "' in table " << table;
 }
 
 void expectNetworkRouteExists(const char* ipVersion, const std::string& ifName,
                               const std::string& dst, const std::string& nextHop,
                               const char* table) {
-    EXPECT_TRUE(ipRouteExists(ipVersion, table, ipRouteString(ifName, dst, nextHop)));
+    expectNetworkRouteExistsWithMtu(ipVersion, ifName, dst, nextHop, "", table);
 }
 
 void expectNetworkRouteDoesNotExist(const char* ipVersion, const std::string& ifName,
                                     const std::string& dst, const std::string& nextHop,
                                     const char* table) {
-    EXPECT_FALSE(ipRouteExists(ipVersion, table, ipRouteString(ifName, dst, nextHop)));
+    std::string routeString = ipRouteString(ifName, dst, nextHop, "");
+    EXPECT_FALSE(ipRouteExists(ipVersion, table, ipRouteString(ifName, dst, nextHop, "")))
+            << "Found unexpected route " << routeString << " in table " << table;
 }
 
 bool ipRuleExists(const char* ipVersion, const std::string& ipRule) {
@@ -1886,6 +1905,46 @@ TEST_F(BinderTest, NetworkAddRemoveRouteUserPermission) {
         }
     }
 
+    for (size_t i = 0; i < std::size(kTestData); i++) {
+        const auto& td = kTestData[i];
+        int mtu = (i % 2) ? 1480 : 1280;
+
+        android::net::RouteInfoParcel parcel;
+        parcel.ifName = sTun.name();
+        parcel.destination = td.testDest;
+        parcel.nextHop = td.testNextHop;
+        parcel.mtu = mtu;
+        binder::Status status = mNetd->networkAddRouteParcel(TEST_NETID1, parcel);
+        if (td.expectSuccess) {
+            EXPECT_TRUE(status.isOk()) << status.exceptionMessage();
+            expectNetworkRouteExistsWithMtu(td.ipVersion, sTun.name(), td.testDest, td.testNextHop,
+                                            std::to_string(parcel.mtu), sTun.name().c_str());
+        } else {
+            EXPECT_EQ(binder::Status::EX_SERVICE_SPECIFIC, status.exceptionCode());
+            EXPECT_NE(0, status.serviceSpecificErrorCode());
+        }
+
+        parcel.mtu = 1337;
+        status = mNetd->networkUpdateRouteParcel(TEST_NETID1, parcel);
+        if (td.expectSuccess) {
+            EXPECT_TRUE(status.isOk()) << status.exceptionMessage();
+            expectNetworkRouteExistsWithMtu(td.ipVersion, sTun.name(), td.testDest, td.testNextHop,
+                                            std::to_string(parcel.mtu), sTun.name().c_str());
+        } else {
+            EXPECT_EQ(binder::Status::EX_SERVICE_SPECIFIC, status.exceptionCode());
+            EXPECT_NE(0, status.serviceSpecificErrorCode());
+        }
+
+        status = mNetd->networkRemoveRouteParcel(TEST_NETID1, parcel);
+        if (td.expectSuccess) {
+            EXPECT_TRUE(status.isOk()) << status.exceptionMessage();
+            expectNetworkRouteDoesNotExist(td.ipVersion, sTun.name(), td.testDest, td.testNextHop,
+                                           sTun.name().c_str());
+        } else {
+            EXPECT_EQ(binder::Status::EX_SERVICE_SPECIFIC, status.exceptionCode());
+            EXPECT_NE(0, status.serviceSpecificErrorCode());
+        }
+    }
     // Remove test physical network
     EXPECT_TRUE(mNetd->networkDestroy(TEST_NETID1).isOk());
 }
@@ -2850,8 +2909,7 @@ TEST_F(BinderTest, TcpBufferSet) {
 namespace {
 
 void checkUidsInPermissionMap(std::vector<int32_t>& uids, bool exist) {
-    android::bpf::BpfMap<uint32_t, uint8_t> uidPermissionMap(
-            android::bpf::mapRetrieve(UID_PERMISSION_MAP_PATH, 0));
+    android::bpf::BpfMap<uint32_t, uint8_t> uidPermissionMap(UID_PERMISSION_MAP_PATH);
     for (int32_t uid : uids) {
         android::base::Result<uint8_t> permission = uidPermissionMap.readValue(uid);
         if (exist) {
@@ -2919,11 +2977,6 @@ TEST_F(BinderTest, UnsolEvents) {
 }
 
 TEST_F(BinderTest, NDC) {
-    // Disable test on 5.x kernels.
-    utsname u;
-    uname(&u);
-    if (u.release[0] == '5') return;
-
     struct Command {
         const std::string cmdString;
         const std::string expectedResult;

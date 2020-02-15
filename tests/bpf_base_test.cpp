@@ -68,7 +68,15 @@ TEST_F(BpfBasicTest, TestCgroupMounted) {
     SKIP_IF_BPF_NOT_SUPPORTED;
 
     std::string cg2_path;
+#if 0
+    // This is the correct way to fetch cg2_path, but it occasionally hits ASAN
+    // problems due to memory allocated in non ASAN code being freed later by us
     ASSERT_EQ(true, CgroupGetControllerPath(CGROUPV2_CONTROLLER_NAME, &cg2_path));
+#else
+    ASSERT_EQ(true, CgroupGetControllerPath(CGROUPV2_CONTROLLER_NAME, nullptr));
+    // Constant derived from //system/core/libprocessgroup/profiles/cgroups.json
+    cg2_path = "/dev/cg2_bpf";
+#endif
     ASSERT_EQ(0, access(cg2_path.c_str(), R_OK));
     ASSERT_EQ(0, access((cg2_path + "/cgroup.controllers").c_str(), R_OK));
 }
@@ -100,7 +108,7 @@ TEST_F(BpfBasicTest, TestSocketFilterSetUp) {
 TEST_F(BpfBasicTest, TestTagSocket) {
     SKIP_IF_BPF_NOT_SUPPORTED;
 
-    BpfMap<uint64_t, UidTagValue> cookieTagMap(mapRetrieve(COOKIE_TAG_MAP_PATH, 0));
+    BpfMap<uint64_t, UidTagValue> cookieTagMap(COOKIE_TAG_MAP_PATH);
     ASSERT_LE(0, cookieTagMap.getMap());
     int sock = socket(AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
     ASSERT_LE(0, sock);
@@ -120,7 +128,7 @@ TEST_F(BpfBasicTest, TestTagSocket) {
 TEST_F(BpfBasicTest, TestCloseSocketWithoutUntag) {
     SKIP_IF_BPF_NOT_SUPPORTED;
 
-    BpfMap<uint64_t, UidTagValue> cookieTagMap(mapRetrieve(COOKIE_TAG_MAP_PATH, 0));
+    BpfMap<uint64_t, UidTagValue> cookieTagMap(COOKIE_TAG_MAP_PATH);
     ASSERT_LE(0, cookieTagMap.getMap());
     int sock = socket(AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
     ASSERT_LE(0, sock);
@@ -147,7 +155,7 @@ TEST_F(BpfBasicTest, TestCloseSocketWithoutUntag) {
 TEST_F(BpfBasicTest, TestChangeCounterSet) {
     SKIP_IF_BPF_NOT_SUPPORTED;
 
-    BpfMap<uint32_t, uint8_t> uidCounterSetMap(mapRetrieve(UID_COUNTERSET_MAP_PATH, 0));
+    BpfMap<uint32_t, uint8_t> uidCounterSetMap(UID_COUNTERSET_MAP_PATH);
     ASSERT_LE(0, uidCounterSetMap.getMap());
     ASSERT_EQ(0, qtaguid_setCounterSet(TEST_COUNTERSET, TEST_UID));
     uid_t uid = TEST_UID;
@@ -163,11 +171,11 @@ TEST_F(BpfBasicTest, TestChangeCounterSet) {
 TEST_F(BpfBasicTest, TestDeleteTagData) {
     SKIP_IF_BPF_NOT_SUPPORTED;
 
-    BpfMap<StatsKey, StatsValue> statsMapA(mapRetrieve(STATS_MAP_A_PATH, 0));
+    BpfMap<StatsKey, StatsValue> statsMapA(STATS_MAP_A_PATH);
     ASSERT_LE(0, statsMapA.getMap());
-    BpfMap<StatsKey, StatsValue> statsMapB(mapRetrieve(STATS_MAP_B_PATH, 0));
+    BpfMap<StatsKey, StatsValue> statsMapB(STATS_MAP_B_PATH);
     ASSERT_LE(0, statsMapB.getMap());
-    BpfMap<uint32_t, StatsValue> appUidStatsMap(mapRetrieve(APP_UID_STATS_MAP_PATH, 0));
+    BpfMap<uint32_t, StatsValue> appUidStatsMap(APP_UID_STATS_MAP_PATH);
     ASSERT_LE(0, appUidStatsMap.getMap());
 
     StatsKey key = {.uid = TEST_UID, .tag = TEST_TAG, .counterSet = TEST_COUNTERSET,

@@ -31,6 +31,7 @@ aidl_interface {
         "binder/android/net/INetdUnsolicitedEventListener.aidl",
         "binder/android/net/InterfaceConfigurationParcel.aidl",
         "binder/android/net/MarkMaskParcel.aidl",
+        "binder/android/net/RouteInfoParcel.aidl",
         "binder/android/net/TetherConfigParcel.aidl",
         "binder/android/net/TetherStatsParcel.aidl",
         "binder/android/net/UidRangeParcel.aidl",
@@ -167,6 +168,12 @@ cc_binary {
         "main.cpp",
         "oem_iptables_hook.cpp",
     ],
+    sanitize: {
+        cfi: true,
+        diag: {
+            cfi: true,
+        },
+    },
 }
 
 cc_binary {
@@ -194,6 +201,12 @@ cc_binary {
         "UidRanges.cpp",
         "NdcDispatcher.cpp",
     ],
+    sanitize: {
+        cfi: true,
+        diag: {
+            cfi: true,
+        },
+    },
 }
 
 cc_test {
