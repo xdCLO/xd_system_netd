@@ -17,6 +17,7 @@ filegroup {
         "InterfaceController.cpp",
         "NetlinkCommands.cpp",
         "NetlinkListener.cpp",
+        "SockDiag.cpp",
         "XfrmController.cpp",
         "TrafficController.cpp",
     ],
@@ -110,7 +111,7 @@ cc_library_static {
         "libpcap",
         "libqtaguid",
         "libssl",
-        "netd_aidl_interface-unstable-cpp",
+        "netd_aidl_interface-cpp",
         "netd_event_listener_interface-cpp",
     ],
     aidl: {
