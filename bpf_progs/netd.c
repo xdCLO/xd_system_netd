@@ -184,7 +184,7 @@ static __always_inline BpfConfig getConfig(uint32_t configKey) {
 static inline int bpf_owner_match(struct __sk_buff* skb, uint32_t uid, int direction) {
     if (skip_owner_match(skb)) return BPF_PASS;
 
-    if ((uid <= MAX_SYSTEM_UID) && (uid >= MIN_SYSTEM_UID)) return BPF_PASS;
+    if (is_system_uid(uid)) return BPF_PASS;
 
     BpfConfig enabledRules = getConfig(UID_RULES_CONFIGURATION_KEY);
 
@@ -223,6 +223,12 @@ static __always_inline inline void update_stats_with_config(struct __sk_buff* sk
 
 static __always_inline inline int bpf_traffic_account(struct __sk_buff* skb, int direction) {
     uint32_t sock_uid = bpf_get_socket_uid(skb);
+    // Always allow and never count clat traffic. Only the IPv4 traffic on the stacked
+    // interface is accounted for and subject to usage restrictions.
+    if (sock_uid == AID_CLAT) {
+        return BPF_PASS;
+    }
+
     int match = bpf_owner_match(skb, sock_uid, direction);
     if ((direction == BPF_EGRESS) && (match == BPF_DROP)) {
         // If an outbound packet is going to be dropped, we do not count that
